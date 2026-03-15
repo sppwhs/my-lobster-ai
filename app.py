@@ -1,9 +1,10 @@
 import os
 import uuid
-from datetime import datetime
+from typing import Optional
 
 import streamlit as st
 import google.generativeai as genai
+from supabase import create_client
 
 
 # =========================
@@ -52,11 +53,6 @@ st.markdown(
         margin-bottom: 0.5rem;
     }
 
-    .session-meta {
-        font-size: 0.8rem;
-        color: #888;
-    }
-
     .stButton > button {
         border-radius: 12px;
     }
@@ -67,53 +63,135 @@ st.markdown(
 
 
 # =========================
-# ENV / Gemini
+# ENV
 # =========================
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
 
+missing = []
 if not GOOGLE_API_KEY:
-    st.error("Missing env var: GOOGLE_API_KEY")
+    missing.append("GOOGLE_API_KEY")
+if not SUPABASE_URL:
+    missing.append("SUPABASE_URL")
+if not SUPABASE_ANON_KEY:
+    missing.append("SUPABASE_ANON_KEY")
+
+if missing:
+    st.error("Missing env vars: " + ", ".join(missing))
     st.stop()
 
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel("gemini-2.5-flash")
+supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 
 # =========================
 # Session State
 # =========================
-if "chat_sessions" not in st.session_state:
-    st.session_state.chat_sessions = {}
-
 if "active_chat_id" not in st.session_state:
-    new_id = str(uuid.uuid4())
-    st.session_state.active_chat_id = new_id
-    st.session_state.chat_sessions[new_id] = {
-        "title": "New Chat",
-        "messages": [],
-        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-    }
+    st.session_state.active_chat_id = None
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
 if "uploaded_file_cache" not in st.session_state:
     st.session_state.uploaded_file_cache = None
 
 
 # =========================
-# Helpers
+# DB Helpers
 # =========================
-def get_active_chat():
-    return st.session_state.chat_sessions[st.session_state.active_chat_id]
+def list_sessions():
+    resp = (
+        supabase.table("lobster_sessions")
+        .select("id, title, created_at, updated_at")
+        .order("updated_at", desc=True)
+        .limit(100)
+        .execute()
+    )
+    return resp.data or []
 
 
-def create_new_chat():
-    new_id = str(uuid.uuid4())
-    st.session_state.chat_sessions[new_id] = {
-        "title": "New Chat",
-        "messages": [],
-        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-    }
-    st.session_state.active_chat_id = new_id
-    st.session_state.uploaded_file_cache = None
+def create_session(title: str = "New Chat") -> str:
+    sid = str(uuid.uuid4())
+    supabase.table("lobster_sessions").insert(
+        {
+            "id": sid,
+            "title": title[:80] or "New Chat",
+        }
+    ).execute()
+    return sid
+
+
+def load_messages(session_id: str):
+    resp = (
+        supabase.table("lobster_messages")
+        .select("role, content, created_at")
+        .eq("session_id", session_id)
+        .order("created_at")
+        .execute()
+    )
+    st.session_state.messages = [
+        {"role": row["role"], "content": row["content"]}
+        for row in (resp.data or [])
+    ]
+
+
+def save_message(session_id: str, role: str, content: str):
+    supabase.table("lobster_messages").insert(
+        {
+            "session_id": session_id,
+            "role": role,
+            "content": content,
+        }
+    ).execute()
+
+
+def update_session_title_if_needed(session_id: str, prompt: str):
+    resp = (
+        supabase.table("lobster_sessions")
+        .select("title")
+        .eq("id", session_id)
+        .single()
+        .execute()
+    )
+
+    current_title = "New Chat"
+    if resp.data:
+        current_title = resp.data.get("title") or "New Chat"
+
+    if current_title == "New Chat":
+        new_title = prompt.strip().replace("\n", " ")[:30] or "New Chat"
+        (
+            supabase.table("lobster_sessions")
+            .update({"title": new_title})
+            .eq("id", session_id)
+            .execute()
+        )
+
+
+def touch_session(session_id: str):
+    (
+        supabase.table("lobster_sessions")
+        .update({})
+        .eq("id", session_id)
+        .execute()
+    )
+
+
+def ensure_active_chat():
+    if st.session_state.active_chat_id:
+        return
+
+    sessions = list_sessions()
+    if sessions:
+        st.session_state.active_chat_id = sessions[0]["id"]
+        load_messages(st.session_state.active_chat_id)
+    else:
+        sid = create_session("New Chat")
+        st.session_state.active_chat_id = sid
+        st.session_state.messages = []
 
 
 def build_history_for_model(messages, limit=12):
@@ -124,46 +202,37 @@ def build_history_for_model(messages, limit=12):
     return history
 
 
-def update_chat_title_if_needed(chat_id, prompt):
-    current_title = st.session_state.chat_sessions[chat_id]["title"]
-    if current_title == "New Chat":
-        title = prompt.strip().replace("\n", " ")[:30]
-        st.session_state.chat_sessions[chat_id]["title"] = title or "New Chat"
-
-
-def get_sorted_sessions():
-    items = list(st.session_state.chat_sessions.items())
-    items.sort(
-        key=lambda x: x[1].get("created_at", ""),
-        reverse=True,
-    )
-    return items
+ensure_active_chat()
 
 
 # =========================
-# Sidebar (ChatGPT-like)
+# Sidebar
 # =========================
 with st.sidebar:
     st.markdown("## 🦞 Lobster")
 
     if st.button("＋ New Chat", use_container_width=True):
-        create_new_chat()
+        sid = create_session("New Chat")
+        st.session_state.active_chat_id = sid
+        st.session_state.messages = []
+        st.session_state.uploaded_file_cache = None
         st.rerun()
 
     st.markdown("---")
     st.markdown("### Chats")
 
-    for chat_id, chat_data in get_sorted_sessions():
-        label = chat_data["title"] or "New Chat"
-        is_active = chat_id == st.session_state.active_chat_id
-        prefix = "🟣 " if is_active else "⚪ "
-        if st.button(
-            f"{prefix}{label}",
-            key=f"chat_{chat_id}",
-            use_container_width=True,
-        ):
-            st.session_state.active_chat_id = chat_id
-            st.rerun()
+    try:
+        sessions = list_sessions()
+        for s in sessions:
+            label = s["title"] or "New Chat"
+            active = s["id"] == st.session_state.active_chat_id
+            prefix = "🟣 " if active else "⚪ "
+            if st.button(f"{prefix}{label}", key=f"chat_{s['id']}", use_container_width=True):
+                st.session_state.active_chat_id = s["id"]
+                load_messages(s["id"])
+                st.rerun()
+    except Exception as e:
+        st.caption(f"Load sessions failed: {e}")
 
     st.markdown("---")
     uploaded_file = st.file_uploader(
@@ -184,16 +253,13 @@ with st.sidebar:
 # =========================
 # Main UI
 # =========================
-active_chat = get_active_chat()
-messages = active_chat["messages"]
-
 st.markdown('<div class="lobster-title">🦞 龍蝦王助手</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="lobster-subtitle">單人版 · ChatGPT 風格介面</div>',
+    '<div class="lobster-subtitle">單人版 · ChatGPT 風格介面 · Supabase 永久儲存</div>',
     unsafe_allow_html=True,
 )
 
-if not messages:
+if not st.session_state.messages:
     st.markdown(
         """
         <div class="chat-empty">
@@ -204,7 +270,7 @@ if not messages:
         unsafe_allow_html=True,
     )
 
-for msg in messages:
+for msg in st.session_state.messages:
     with st.chat_message("assistant" if msg["role"] == "assistant" else "user"):
         st.markdown(msg["content"])
 
@@ -215,12 +281,18 @@ for msg in messages:
 prompt = st.chat_input("Message Lobster...")
 
 if prompt:
-    active_chat = get_active_chat()
-    active_chat["messages"].append({"role": "user", "content": prompt})
-    update_chat_title_if_needed(st.session_state.active_chat_id, prompt)
+    session_id = st.session_state.active_chat_id
 
+    st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
+
+    try:
+        save_message(session_id, "user", prompt)
+        update_session_title_if_needed(session_id, prompt)
+        touch_session(session_id)
+    except Exception as e:
+        st.warning(f"Save user message failed: {e}")
 
     try:
         content_parts = [prompt]
@@ -233,7 +305,7 @@ if prompt:
                 }
             )
 
-        history = build_history_for_model(active_chat["messages"][:-1], limit=12)
+        history = build_history_for_model(st.session_state.messages[:-1], limit=12)
 
         response = model.generate_content(
             contents=history + [{"role": "user", "parts": content_parts}]
@@ -246,5 +318,12 @@ if prompt:
     with st.chat_message("assistant"):
         st.markdown(reply)
 
-    active_chat["messages"].append({"role": "assistant", "content": reply})
+    st.session_state.messages.append({"role": "assistant", "content": reply})
+
+    try:
+        save_message(session_id, "assistant", reply)
+        touch_session(session_id)
+    except Exception as e:
+        st.warning(f"Save assistant message failed: {e}")
+
     st.rerun()
