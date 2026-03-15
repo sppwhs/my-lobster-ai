@@ -17,7 +17,12 @@ model = genai.GenerativeModel(
 )
 supabase = create_client(url, key)
 
-st.set_page_config(page_title="龍蝦王的小助手", page_icon="🦞", layout="wide")
+st.set_page_config(page_title="龍蝦王小助手", page_icon="🦞")
+
+# --- 這裡就是被弄丟的標題區 ---
+st.title("🦞 龍蝦王小助手")
+st.markdown("---") # 加一條分隔線會更有質感
+# -------------------------
 
 # --- 側邊欄：歷史紀錄與下載 ---
 with st.sidebar:
