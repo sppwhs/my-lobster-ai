@@ -1,6 +1,5 @@
 import os
 import uuid
-from typing import Optional
 
 import streamlit as st
 import google.generativeai as genai
@@ -35,12 +34,7 @@ st.markdown(
     .lobster-title {
         font-size: 2.2rem;
         font-weight: 700;
-        margin-bottom: 0.2rem;
-    }
-
-    .lobster-subtitle {
-        color: #666;
-        margin-bottom: 1rem;
+        margin-bottom: 0.8rem;
     }
 
     .chat-empty {
@@ -55,6 +49,16 @@ st.markdown(
 
     .stButton > button {
         border-radius: 12px;
+    }
+
+    .session-row {
+        padding: 0;
+        margin: 0;
+    }
+
+    .thinking-box {
+        color: #666;
+        font-style: italic;
     }
     </style>
     """,
@@ -98,6 +102,12 @@ if "messages" not in st.session_state:
 if "uploaded_file_cache" not in st.session_state:
     st.session_state.uploaded_file_cache = None
 
+if "rename_target" not in st.session_state:
+    st.session_state.rename_target = None
+
+if "rename_input" not in st.session_state:
+    st.session_state.rename_input = ""
+
 
 # =========================
 # DB Helpers
@@ -107,7 +117,7 @@ def list_sessions():
         supabase.table("lobster_sessions")
         .select("id, title, created_at, updated_at")
         .order("updated_at", desc=True)
-        .limit(100)
+        .limit(200)
         .execute()
     )
     return resp.data or []
@@ -171,13 +181,45 @@ def update_session_title_if_needed(session_id: str, prompt: str):
         )
 
 
-def touch_session(session_id: str):
+def rename_session(session_id: str, new_title: str):
+    clean_title = (new_title or "").strip()[:80]
+    if not clean_title:
+        clean_title = "New Chat"
+
     (
         supabase.table("lobster_sessions")
-        .update({})
+        .update({"title": clean_title})
         .eq("id", session_id)
         .execute()
     )
+
+
+def delete_session(session_id: str):
+    (
+        supabase.table("lobster_sessions")
+        .delete()
+        .eq("id", session_id)
+        .execute()
+    )
+
+
+def touch_session(session_id: str):
+    # 用 title 原值更新，確保 updated_at 會刷新
+    resp = (
+        supabase.table("lobster_sessions")
+        .select("title")
+        .eq("id", session_id)
+        .single()
+        .execute()
+    )
+    if resp.data:
+        current_title = resp.data.get("title") or "New Chat"
+        (
+            supabase.table("lobster_sessions")
+            .update({"title": current_title})
+            .eq("id", session_id)
+            .execute()
+        )
 
 
 def ensure_active_chat():
@@ -216,6 +258,8 @@ with st.sidebar:
         st.session_state.active_chat_id = sid
         st.session_state.messages = []
         st.session_state.uploaded_file_cache = None
+        st.session_state.rename_target = None
+        st.session_state.rename_input = ""
         st.rerun()
 
     st.markdown("---")
@@ -223,18 +267,74 @@ with st.sidebar:
 
     try:
         sessions = list_sessions()
+
         for s in sessions:
+            session_id = s["id"]
             label = s["title"] or "New Chat"
-            active = s["id"] == st.session_state.active_chat_id
-            prefix = "🟣 " if active else "⚪ "
-            if st.button(f"{prefix}{label}", key=f"chat_{s['id']}", use_container_width=True):
-                st.session_state.active_chat_id = s["id"]
-                load_messages(s["id"])
-                st.rerun()
+            active = session_id == st.session_state.active_chat_id
+
+            col1, col2, col3 = st.columns([8, 1, 1])
+
+            with col1:
+                prefix = "🟣 " if active else "⚪ "
+                if st.button(
+                    f"{prefix}{label}",
+                    key=f"chat_{session_id}",
+                    use_container_width=True,
+                ):
+                    st.session_state.active_chat_id = session_id
+                    load_messages(session_id)
+                    st.session_state.rename_target = None
+                    st.rerun()
+
+            with col2:
+                if st.button("✏️", key=f"rename_btn_{session_id}"):
+                    st.session_state.rename_target = session_id
+                    st.session_state.rename_input = label
+                    st.rerun()
+
+            with col3:
+                if st.button("🗑️", key=f"delete_btn_{session_id}"):
+                    delete_session(session_id)
+
+                    if st.session_state.active_chat_id == session_id:
+                        remaining = list_sessions()
+                        if remaining:
+                            st.session_state.active_chat_id = remaining[0]["id"]
+                            load_messages(remaining[0]["id"])
+                        else:
+                            new_id = create_session("New Chat")
+                            st.session_state.active_chat_id = new_id
+                            st.session_state.messages = []
+
+                    st.session_state.rename_target = None
+                    st.rerun()
+
+            if st.session_state.rename_target == session_id:
+                new_title = st.text_input(
+                    "重新命名",
+                    value=st.session_state.rename_input,
+                    key=f"rename_input_{session_id}",
+                    label_visibility="collapsed",
+                )
+
+                col_save, col_cancel = st.columns(2)
+                with col_save:
+                    if st.button("保存", key=f"rename_save_{session_id}", use_container_width=True):
+                        rename_session(session_id, new_title)
+                        st.session_state.rename_target = None
+                        st.session_state.rename_input = ""
+                        st.rerun()
+                with col_cancel:
+                    if st.button("取消", key=f"rename_cancel_{session_id}", use_container_width=True):
+                        st.session_state.rename_target = None
+                        st.session_state.rename_input = ""
+                        st.rerun()
+
+        st.markdown("---")
     except Exception as e:
         st.caption(f"Load sessions failed: {e}")
 
-    st.markdown("---")
     uploaded_file = st.file_uploader(
         "Upload context",
         type=["txt", "pdf", "csv", "png", "jpg", "jpeg"],
@@ -249,15 +349,16 @@ with st.sidebar:
         }
         st.caption(f"已載入：{uploaded_file.name}")
 
+    if st.session_state.uploaded_file_cache:
+        if st.button("清除檔案", use_container_width=True):
+            st.session_state.uploaded_file_cache = None
+            st.rerun()
+
 
 # =========================
 # Main UI
 # =========================
 st.markdown('<div class="lobster-title">🦞 龍蝦王助手</div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="lobster-subtitle">單人版 · ChatGPT 風格介面 · Supabase 永久儲存</div>',
-    unsafe_allow_html=True,
-)
 
 if not st.session_state.messages:
     st.markdown(
@@ -294,29 +395,37 @@ if prompt:
     except Exception as e:
         st.warning(f"Save user message failed: {e}")
 
-    try:
-        content_parts = [prompt]
+    with st.chat_message("assistant"):
+        thinking_placeholder = st.empty()
 
         if st.session_state.uploaded_file_cache:
-            content_parts.append(
-                {
-                    "mime_type": st.session_state.uploaded_file_cache["type"],
-                    "data": st.session_state.uploaded_file_cache["data"],
-                }
-            )
+            thinking_placeholder.markdown("🦞 龍蝦正在閱讀檔案並思考中...")
+        else:
+            thinking_placeholder.markdown("🦞 龍蝦正在思考中...")
 
-        history = build_history_for_model(st.session_state.messages[:-1], limit=12)
+        try:
+            content_parts = [prompt]
 
-        response = model.generate_content(
-            contents=history + [{"role": "user", "parts": content_parts}]
-        )
-        reply = response.text
+            if st.session_state.uploaded_file_cache:
+                content_parts.append(
+                    {
+                        "mime_type": st.session_state.uploaded_file_cache["type"],
+                        "data": st.session_state.uploaded_file_cache["data"],
+                    }
+                )
 
-    except Exception as e:
-        reply = f"⚠️ AI error: {e}"
+            history = build_history_for_model(st.session_state.messages[:-1], limit=12)
 
-    with st.chat_message("assistant"):
-        st.markdown(reply)
+            with st.spinner("龍蝦正在整理答案..."):
+                response = model.generate_content(
+                    contents=history + [{"role": "user", "parts": content_parts}]
+                )
+                reply = response.text
+
+        except Exception as e:
+            reply = f"⚠️ AI error: {e}"
+
+        thinking_placeholder.markdown(reply)
 
     st.session_state.messages.append({"role": "assistant", "content": reply})
 
