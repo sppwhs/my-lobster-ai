@@ -1,43 +1,78 @@
 import os
-from typing import Any, Optional
+import uuid
+from datetime import datetime
 
 import streamlit as st
 import google.generativeai as genai
-from supabase import create_client
 
 
 # =========================
-# 基本設定
+# Page Config
 # =========================
 st.set_page_config(
     page_title="Lobster AI",
     page_icon="🦞",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 st.markdown(
-    "<style>#MainMenu, footer, header {visibility:hidden;}</style>",
+    """
+    <style>
+    #MainMenu, footer, header {visibility: hidden;}
+
+    .block-container {
+        padding-top: 1.2rem;
+        padding-bottom: 1rem;
+        max-width: 1100px;
+    }
+
+    section[data-testid="stSidebar"] {
+        width: 320px !important;
+    }
+
+    .lobster-title {
+        font-size: 2.2rem;
+        font-weight: 700;
+        margin-bottom: 0.2rem;
+    }
+
+    .lobster-subtitle {
+        color: #666;
+        margin-bottom: 1rem;
+    }
+
+    .chat-empty {
+        text-align: center;
+        padding: 3rem 1rem 2rem 1rem;
+        color: #666;
+    }
+
+    .chat-empty h2 {
+        margin-bottom: 0.5rem;
+    }
+
+    .session-meta {
+        font-size: 0.8rem;
+        color: #888;
+    }
+
+    .stButton > button {
+        border-radius: 12px;
+    }
+    </style>
+    """,
     unsafe_allow_html=True,
 )
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
+
+# =========================
+# ENV / Gemini
+# =========================
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-APP_URL = os.getenv("APP_URL")
 
-missing = []
-if not SUPABASE_URL:
-    missing.append("SUPABASE_URL")
-if not SUPABASE_ANON_KEY:
-    missing.append("SUPABASE_ANON_KEY")
 if not GOOGLE_API_KEY:
-    missing.append("GOOGLE_API_KEY")
-if not APP_URL:
-    missing.append("APP_URL")
-
-if missing:
-    st.error("Missing env vars: " + ", ".join(missing))
+    st.error("Missing env var: GOOGLE_API_KEY")
     st.stop()
 
 genai.configure(api_key=GOOGLE_API_KEY)
@@ -45,411 +80,161 @@ model = genai.GenerativeModel("gemini-2.5-flash")
 
 
 # =========================
-# Supabase client
+# Session State
 # =========================
-def get_supabase():
-    return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+if "chat_sessions" not in st.session_state:
+    st.session_state.chat_sessions = {}
 
+if "active_chat_id" not in st.session_state:
+    new_id = str(uuid.uuid4())
+    st.session_state.active_chat_id = new_id
+    st.session_state.chat_sessions[new_id] = {
+        "title": "New Chat",
+        "messages": [],
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    }
 
-# =========================
-# Session State 初始化
-# =========================
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-if "active_chat_session_id" not in st.session_state:
-    st.session_state.active_chat_session_id = None
-
-if "access_token" not in st.session_state:
-    st.session_state.access_token = None
-
-if "refresh_token" not in st.session_state:
-    st.session_state.refresh_token = None
-
-if "user" not in st.session_state:
-    st.session_state.user = None
-
-if "oauth_exchanged" not in st.session_state:
-    st.session_state.oauth_exchanged = False
+if "uploaded_file_cache" not in st.session_state:
+    st.session_state.uploaded_file_cache = None
 
 
 # =========================
-# 工具函式
+# Helpers
 # =========================
-def safe_getattr(obj: Any, name: str, default=None):
-    return getattr(obj, name, default) if obj is not None else default
+def get_active_chat():
+    return st.session_state.chat_sessions[st.session_state.active_chat_id]
 
 
-def get_oauth_url(resp: Any) -> Optional[str]:
-    if resp is None:
-        return None
-
-    if hasattr(resp, "url") and resp.url:
-        return resp.url
-
-    data = safe_getattr(resp, "data")
-    if data is not None:
-        if isinstance(data, dict):
-            return data.get("url")
-        if hasattr(data, "url"):
-            return data.url
-
-    if isinstance(resp, dict):
-        return resp.get("url") or (resp.get("data") or {}).get("url")
-
-    return None
+def create_new_chat():
+    new_id = str(uuid.uuid4())
+    st.session_state.chat_sessions[new_id] = {
+        "title": "New Chat",
+        "messages": [],
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    }
+    st.session_state.active_chat_id = new_id
+    st.session_state.uploaded_file_cache = None
 
 
-def get_session_obj(supabase):
-    try:
-        if st.session_state.access_token and st.session_state.refresh_token:
-            resp = supabase.auth.set_session(
-                st.session_state.access_token,
-                st.session_state.refresh_token,
-            )
-            session = safe_getattr(resp, "session")
-            if session:
-                return session
-    except Exception:
-        pass
-
-    try:
-        resp = supabase.auth.get_session()
-        session = safe_getattr(resp, "session")
-        if session:
-            return session
-    except Exception:
-        pass
-
-    return None
-
-
-def load_user_from_session():
-    supabase = get_supabase()
-    session = get_session_obj(supabase)
-    if not session:
-        st.session_state.user = None
-        return None
-
-    access_token = safe_getattr(session, "access_token")
-    refresh_token = safe_getattr(session, "refresh_token")
-    user = safe_getattr(session, "user")
-
-    if access_token:
-        st.session_state.access_token = access_token
-    if refresh_token:
-        st.session_state.refresh_token = refresh_token
-    if user:
-        st.session_state.user = user
-
-    return user
-
-
-def user_id() -> Optional[str]:
-    user = st.session_state.user
-    if not user:
-        return None
-    return safe_getattr(user, "id")
-
-
-def user_email() -> str:
-    user = st.session_state.user
-    if not user:
-        return ""
-    return safe_getattr(user, "email", "") or ""
-
-
-def clear_auth_state():
-    st.session_state.access_token = None
-    st.session_state.refresh_token = None
-    st.session_state.user = None
-    st.session_state.messages = []
-    st.session_state.active_chat_session_id = None
-    st.session_state.oauth_exchanged = False
-
-
-def create_chat_session(title: str = "New Chat") -> Optional[str]:
-    uid = user_id()
-    if not uid:
-        return None
-
-    supabase = get_supabase()
-    session = get_session_obj(supabase)
-    if not session:
-        return None
-
-    resp = (
-        supabase.table("chat_sessions")
-        .insert(
-            {
-                "user_id": uid,
-                "title": title[:80],
-            }
-        )
-        .execute()
-    )
-
-    if resp.data and len(resp.data) > 0:
-        return resp.data[0]["id"]
-
-    return None
-
-
-def load_chat_history(session_id: str):
-    uid = user_id()
-    if not uid:
-        return
-
-    supabase = get_supabase()
-    session = get_session_obj(supabase)
-    if not session:
-        return
-
-    resp = (
-        supabase.table("chat_history")
-        .select("role, content, created_at")
-        .eq("user_id", uid)
-        .eq("session_id", session_id)
-        .order("created_at")
-        .execute()
-    )
-
-    st.session_state.messages = [
-        {"role": row["role"], "content": row["content"]}
-        for row in (resp.data or [])
-    ]
-
-
-def list_my_sessions():
-    uid = user_id()
-    if not uid:
-        return []
-
-    supabase = get_supabase()
-    session = get_session_obj(supabase)
-    if not session:
-        return []
-
-    resp = (
-        supabase.table("chat_sessions")
-        .select("id, title, created_at, updated_at")
-        .eq("user_id", uid)
-        .order("updated_at", desc=True)
-        .limit(50)
-        .execute()
-    )
-    return resp.data or []
-
-
-def save_message(session_id: str, role: str, content: str):
-    uid = user_id()
-    if not uid:
-        return
-
-    supabase = get_supabase()
-    session = get_session_obj(supabase)
-    if not session:
-        return
-
-    supabase.table("chat_history").insert(
-        {
-            "session_id": session_id,
-            "user_id": uid,
-            "role": role,
-            "content": content,
-        }
-    ).execute()
-
-
-def touch_session_title_if_needed(session_id: str, user_prompt: str):
-    uid = user_id()
-    if not uid:
-        return
-
-    supabase = get_supabase()
-    session = get_session_obj(supabase)
-    if not session:
-        return
-
-    resp = (
-        supabase.table("chat_sessions")
-        .select("title")
-        .eq("id", session_id)
-        .eq("user_id", uid)
-        .single()
-        .execute()
-    )
-
-    current_title = ""
-    if resp.data:
-        current_title = resp.data.get("title") or ""
-
-    if current_title == "New Chat":
-        new_title = user_prompt.strip()[:30] or "New Chat"
-        (
-            supabase.table("chat_sessions")
-            .update({"title": new_title})
-            .eq("id", session_id)
-            .eq("user_id", uid)
-            .execute()
-        )
-
-
-def build_history_for_model():
+def build_history_for_model(messages, limit=12):
     history = []
-    for m in st.session_state.messages[-12:]:
+    for m in messages[-limit:]:
         role = "user" if m["role"] == "user" else "model"
         history.append({"role": role, "parts": [m["content"]]})
     return history
 
 
-def exchange_code_if_present():
-    code = st.query_params.get("code")
-    if not code or st.session_state.oauth_exchanged:
-        return
-
-    supabase = get_supabase()
-    try:
-        resp = supabase.auth.exchange_code_for_session({"auth_code": code})
-        session = safe_getattr(resp, "session")
-
-        if session:
-            st.session_state.access_token = safe_getattr(session, "access_token")
-            st.session_state.refresh_token = safe_getattr(session, "refresh_token")
-            st.session_state.user = safe_getattr(session, "user")
-            st.session_state.oauth_exchanged = True
-
-            st.query_params.clear()
-            st.rerun()
-    except Exception as e:
-        st.error(f"Google login failed: {e}")
+def update_chat_title_if_needed(chat_id, prompt):
+    current_title = st.session_state.chat_sessions[chat_id]["title"]
+    if current_title == "New Chat":
+        title = prompt.strip().replace("\n", " ")[:30]
+        st.session_state.chat_sessions[chat_id]["title"] = title or "New Chat"
 
 
-# 先處理 OAuth callback
-exchange_code_if_present()
-load_user_from_session()
+def get_sorted_sessions():
+    items = list(st.session_state.chat_sessions.items())
+    items.sort(
+        key=lambda x: x[1].get("created_at", ""),
+        reverse=True,
+    )
+    return items
 
 
 # =========================
-# Sidebar
+# Sidebar (ChatGPT-like)
 # =========================
 with st.sidebar:
-    st.title("🦞 Lobster")
+    st.markdown("## 🦞 Lobster")
 
-    if st.session_state.user:
-        st.success(f"已登入：{user_email()}")
+    if st.button("＋ New Chat", use_container_width=True):
+        create_new_chat()
+        st.rerun()
 
-        if st.button("➕ New Chat", use_container_width=True):
-            sid = create_chat_session("New Chat")
-            st.session_state.active_chat_session_id = sid
-            st.session_state.messages = []
+    st.markdown("---")
+    st.markdown("### Chats")
+
+    for chat_id, chat_data in get_sorted_sessions():
+        label = chat_data["title"] or "New Chat"
+        is_active = chat_id == st.session_state.active_chat_id
+        prefix = "🟣 " if is_active else "⚪ "
+        if st.button(
+            f"{prefix}{label}",
+            key=f"chat_{chat_id}",
+            use_container_width=True,
+        ):
+            st.session_state.active_chat_id = chat_id
             st.rerun()
 
-        if st.button("登出", use_container_width=True):
-            try:
-                supabase = get_supabase()
-                _ = get_session_obj(supabase)
-                supabase.auth.sign_out()
-            except Exception:
-                pass
+    st.markdown("---")
+    uploaded_file = st.file_uploader(
+        "Upload context",
+        type=["txt", "pdf", "csv", "png", "jpg", "jpeg"],
+        key="context_file",
+    )
 
-            clear_auth_state()
-            st.rerun()
-
-        st.write("---")
-        st.subheader("History")
-
-        try:
-            sessions = list_my_sessions()
-            for s in sessions:
-                label = s["title"] or "New Chat"
-                if st.button(f"💬 {label}", key=f"session_{s['id']}", use_container_width=True):
-                    st.session_state.active_chat_session_id = s["id"]
-                    load_chat_history(s["id"])
-                    st.rerun()
-        except Exception as e:
-            st.caption(f"Load history failed: {e}")
-
-    else:
-        st.info("請先用 Google 登入")
-
-        if st.button("使用 Google 登入", use_container_width=True):
-            try:
-                supabase = get_supabase()
-                resp = supabase.auth.sign_in_with_oauth(
-                    {
-                        "provider": "google",
-                        "options": {
-                            "redirect_to": APP_URL,
-                        },
-                    }
-                )
-                oauth_url = get_oauth_url(resp)
-                if oauth_url:
-                    st.link_button("點這裡前往 Google 登入", oauth_url, use_container_width=True)
-                else:
-                    st.error("Cannot generate Google login URL.")
-            except Exception as e:
-                st.error(f"OAuth init failed: {e}")
+    if uploaded_file is not None:
+        st.session_state.uploaded_file_cache = {
+            "name": uploaded_file.name,
+            "type": uploaded_file.type,
+            "data": uploaded_file.getvalue(),
+        }
+        st.caption(f"已載入：{uploaded_file.name}")
 
 
 # =========================
-# Main
+# Main UI
 # =========================
-st.title("🦞 龍蝦王助手")
+active_chat = get_active_chat()
+messages = active_chat["messages"]
 
-if not st.session_state.user:
-    st.write("先按左側 **使用 Google 登入**。")
-    st.stop()
+st.markdown('<div class="lobster-title">🦞 龍蝦王助手</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="lobster-subtitle">單人版 · ChatGPT 風格介面</div>',
+    unsafe_allow_html=True,
+)
 
-if not st.session_state.active_chat_session_id:
-    st.info("先按左側 `New Chat` 建立新對話。")
+if not messages:
+    st.markdown(
+        """
+        <div class="chat-empty">
+            <h2>今天想問龍蝦什麼？</h2>
+            <div>你可以直接輸入問題，或先在左側上傳檔案。</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-for msg in st.session_state.messages:
+for msg in messages:
     with st.chat_message("assistant" if msg["role"] == "assistant" else "user"):
         st.markdown(msg["content"])
 
-uploaded_file = st.file_uploader(
-    "Upload context",
-    type=["txt", "pdf", "csv", "png", "jpg", "jpeg"],
-    key="context_file",
-)
 
+# =========================
+# Chat Input
+# =========================
 prompt = st.chat_input("Message Lobster...")
 
 if prompt:
-    if not st.session_state.active_chat_session_id:
-        sid = create_chat_session(prompt[:30] or "New Chat")
-        st.session_state.active_chat_session_id = sid
+    active_chat = get_active_chat()
+    active_chat["messages"].append({"role": "user", "content": prompt})
+    update_chat_title_if_needed(st.session_state.active_chat_id, prompt)
 
-    session_id = st.session_state.active_chat_session_id
-    if not session_id:
-        st.error("Cannot create chat session.")
-        st.stop()
-
-    st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     try:
-        save_message(session_id, "user", prompt)
-        touch_session_title_if_needed(session_id, prompt)
-    except Exception as e:
-        st.warning(f"Save user message failed: {e}")
-
-    try:
         content_parts = [prompt]
 
-        if uploaded_file is not None:
-            file_bytes = uploaded_file.getvalue()
+        if st.session_state.uploaded_file_cache:
             content_parts.append(
                 {
-                    "mime_type": uploaded_file.type,
-                    "data": file_bytes,
+                    "mime_type": st.session_state.uploaded_file_cache["type"],
+                    "data": st.session_state.uploaded_file_cache["data"],
                 }
             )
 
-        history = build_history_for_model()
+        history = build_history_for_model(active_chat["messages"][:-1], limit=12)
+
         response = model.generate_content(
             contents=history + [{"role": "user", "parts": content_parts}]
         )
@@ -461,9 +246,5 @@ if prompt:
     with st.chat_message("assistant"):
         st.markdown(reply)
 
-    st.session_state.messages.append({"role": "assistant", "content": reply})
-
-    try:
-        save_message(session_id, "assistant", reply)
-    except Exception as e:
-        st.warning(f"Save assistant message failed: {e}")
+    active_chat["messages"].append({"role": "assistant", "content": reply})
+    st.rerun()
