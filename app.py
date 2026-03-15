@@ -35,10 +35,10 @@ st.markdown(
     }
 
     .block-container {
-        padding-top: 0.30rem;
-        padding-bottom: 0.35rem;
-        padding-left: 0.72rem;
-        padding-right: 0.72rem;
+        padding-top: 0.22rem;
+        padding-bottom: 0.25rem;
+        padding-left: 0.65rem;
+        padding-right: 0.65rem;
         max-width: 820px;
     }
 
@@ -47,37 +47,37 @@ st.markdown(
     }
 
     .lobster-title {
-        font-size: 1.18rem;
+        font-size: 1.10rem;
         font-weight: 800;
-        line-height: 1.05;
+        line-height: 1.03;
         letter-spacing: -0.02em;
         margin: 0;
     }
 
     .lobster-subtle {
         color: #6b7280;
-        font-size: 0.76rem;
-        margin-top: 0.05rem;
-        line-height: 1.2;
+        font-size: 0.72rem;
+        margin-top: 0.03rem;
+        line-height: 1.15;
     }
 
     .toolbar-shell {
-        margin-top: 0.42rem;
-        margin-bottom: 0.52rem;
+        margin-top: 0.34rem;
+        margin-bottom: 0.34rem;
     }
 
     .panel-shell {
         border: 1px solid #ededed;
         border-radius: 14px;
-        padding: 0.64rem;
+        padding: 0.52rem;
         background: #fcfcfd;
-        margin-bottom: 0.55rem;
+        margin-bottom: 0.42rem;
     }
 
     .panel-title {
-        font-size: 0.94rem;
+        font-size: 0.92rem;
         font-weight: 700;
-        margin-bottom: 0.42rem;
+        margin-bottom: 0.36rem;
     }
 
     .memory-box {
@@ -90,39 +90,39 @@ st.markdown(
 
     .memory-title {
         font-weight: 700;
-        font-size: 0.91rem;
+        font-size: 0.88rem;
         margin-bottom: 2px;
-        line-height: 1.25;
+        line-height: 1.22;
     }
 
     .memory-meta {
-        font-size: 0.74rem;
+        font-size: 0.73rem;
         color: #666;
         margin-bottom: 3px;
     }
 
     .memory-body {
-        font-size: 0.83rem;
+        font-size: 0.82rem;
         color: #222;
-        line-height: 1.35;
+        line-height: 1.32;
     }
 
     .chat-empty {
         text-align: center;
-        padding: 1.1rem 0.5rem 0.85rem 0.5rem;
+        padding: 0.95rem 0.45rem 0.7rem 0.45rem;
         color: #666;
     }
 
     .chat-empty h2 {
-        margin-bottom: 0.25rem;
-        font-size: 1rem;
+        margin-bottom: 0.2rem;
+        font-size: 0.98rem;
     }
 
     .stButton > button {
         border-radius: 12px !important;
-        min-height: 2.05rem !important;
-        padding: 0.24rem 0.72rem !important;
-        font-size: 0.90rem !important;
+        min-height: 1.95rem !important;
+        padding: 0.22rem 0.68rem !important;
+        font-size: 0.88rem !important;
         box-shadow: none !important;
     }
 
@@ -133,55 +133,60 @@ st.markdown(
     }
 
     div[data-testid="stFileUploader"] section {
-        padding: 0.30rem !important;
+        padding: 0.28rem !important;
+        border-radius: 12px !important;
+    }
+
+    div[data-testid="stExpander"] details {
         border-radius: 12px !important;
     }
 
     div[data-testid="stChatMessage"] {
         border-radius: 14px;
-        padding-top: 0.14rem !important;
-        padding-bottom: 0.14rem !important;
+        padding-top: 0.05rem !important;
+        padding-bottom: 0.05rem !important;
+        margin-bottom: 0.15rem !important;
     }
 
     div[data-testid="stChatMessageContent"] p {
-        line-height: 1.48;
-        font-size: 0.97rem;
+        line-height: 1.42;
+        font-size: 0.96rem;
     }
 
     .element-container {
-        margin-bottom: 0.20rem !important;
+        margin-bottom: 0.16rem !important;
     }
 
     hr {
-        margin-top: 0.25rem !important;
-        margin-bottom: 0.30rem !important;
+        margin-top: 0.15rem !important;
+        margin-bottom: 0.18rem !important;
     }
 
     @media (max-width: 768px) {
         .block-container {
-            padding-top: 0.24rem;
-            padding-left: 0.62rem;
-            padding-right: 0.62rem;
-            padding-bottom: 0.30rem;
+            padding-top: 0.18rem;
+            padding-left: 0.58rem;
+            padding-right: 0.58rem;
+            padding-bottom: 0.22rem;
             max-width: 100%;
         }
 
         .lobster-title {
-            font-size: 1.12rem;
+            font-size: 1.05rem;
         }
 
         .lobster-subtle {
-            font-size: 0.72rem;
+            font-size: 0.70rem;
         }
 
         .panel-shell {
-            padding: 0.56rem;
+            padding: 0.48rem;
             border-radius: 13px;
         }
 
         .stButton > button {
-            min-height: 1.95rem !important;
-            font-size: 0.86rem !important;
+            min-height: 1.9rem !important;
+            font-size: 0.84rem !important;
         }
     }
     </style>
@@ -231,9 +236,6 @@ if "messages" not in st.session_state:
 
 if "uploaded_file_cache" not in st.session_state:
     st.session_state.uploaded_file_cache = None
-
-if "copy_notice" not in st.session_state:
-    st.session_state.copy_notice = None
 
 if "memory_refresh_key" not in st.session_state:
     st.session_state.memory_refresh_key = 0
@@ -768,7 +770,7 @@ ensure_active_chat()
 # =========================
 # Header
 # =========================
-title_col, new_col = st.columns([5.5, 2.5])
+title_col, new_col = st.columns([5.4, 2.6])
 
 with title_col:
     st.markdown(
@@ -854,14 +856,14 @@ if tool_panel == "Chats":
                 placeholder="輸入對話名稱",
             )
 
-            a1, a2 = st.columns(2)
+            c1, c2 = st.columns(2)
 
-            with a1:
+            with c1:
                 if st.button("保存名稱", use_container_width=True):
                     rename_session(st.session_state.active_chat_id, new_title)
                     st.rerun()
 
-            with a2:
+            with c2:
                 if st.button("刪除對話", use_container_width=True):
                     delete_session(st.session_state.active_chat_id)
                     remaining = list_sessions()
@@ -910,7 +912,7 @@ elif tool_panel == "Memory":
     with st.expander("新增記憶", expanded=False):
         mem_title = st.text_input("記憶標題", key=f"mem_title_{st.session_state.memory_refresh_key}")
         mem_tags = st.text_input("標籤（逗號分隔）", key=f"mem_tags_{st.session_state.memory_refresh_key}")
-        mem_content = st.text_area("記憶內容", height=100, key=f"mem_content_{st.session_state.memory_refresh_key}")
+        mem_content = st.text_area("記憶內容", height=96, key=f"mem_content_{st.session_state.memory_refresh_key}")
 
         if st.button("保存記憶", use_container_width=True):
             if mem_content.strip():
@@ -960,7 +962,7 @@ if not st.session_state.messages:
         unsafe_allow_html=True,
     )
 
-for idx, msg in enumerate(st.session_state.messages):
+for msg in st.session_state.messages:
     display_content = msg["content"]
 
     if msg["role"] == "assistant":
@@ -971,12 +973,6 @@ for idx, msg in enumerate(st.session_state.messages):
 
     with st.chat_message("assistant" if msg["role"] == "assistant" else "user"):
         st.markdown(display_content)
-
-        if msg["role"] == "assistant" and msg.get("status") == "completed":
-            with st.expander("操作", expanded=False):
-                copy_key = f"copy_{msg.get('id', idx)}"
-                if st.button("顯示可複製內容", key=copy_key):
-                    st.code(msg["content"], language=None)
 
 
 # =========================
