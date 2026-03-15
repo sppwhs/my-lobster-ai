@@ -2,6 +2,7 @@ import os
 import time
 import uuid
 from io import BytesIO
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Tuple
 
 import pandas as pd
@@ -59,6 +60,11 @@ st.markdown(
         color: #666;
         font-style: italic;
     }
+
+    .status-chip {
+        font-size: 0.8rem;
+        color: #666;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -68,23 +74,30 @@ st.markdown(
 # =========================
 # ENV
 # =========================
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
 
+raw_api_keys = os.getenv("GOOGLE_API_KEYS", "").strip()
+single_api_key = os.getenv("GOOGLE_API_KEY", "").strip()
+
+API_KEY_LIST = []
+if raw_api_keys:
+    API_KEY_LIST = [k.strip() for k in raw_api_keys.split(",") if k.strip()]
+elif single_api_key:
+    API_KEY_LIST = [single_api_key]
+
 missing = []
-if not GOOGLE_API_KEY:
-    missing.append("GOOGLE_API_KEY")
 if not SUPABASE_URL:
     missing.append("SUPABASE_URL")
 if not SUPABASE_ANON_KEY:
     missing.append("SUPABASE_ANON_KEY")
+if not API_KEY_LIST:
+    missing.append("GOOGLE_API_KEYS or GOOGLE_API_KEY")
 
 if missing:
     st.error("Missing env vars: " + ", ".join(missing))
     st.stop()
 
-genai.configure(api_key=GOOGLE_API_KEY)
 supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 
@@ -105,6 +118,30 @@ if "rename_target" not in st.session_state:
 
 if "rename_input" not in st.session_state:
     st.session_state.rename_input = ""
+
+if "copy_notice" not in st.session_state:
+    st.session_state.copy_notice = None
+
+
+# =========================
+# Utility
+# =========================
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def parse_iso_dt(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def shorten_text(text: str, max_len: int = 80) -> str:
+    t = (text or "").strip().replace("\n", " ")
+    return t[:max_len] if t else "New Chat"
 
 
 # =========================
@@ -132,7 +169,78 @@ def create_session(title: str = "New Chat") -> str:
     return sid
 
 
+def create_message(
+    session_id: str,
+    role: str,
+    content: str,
+    status: str = "completed",
+    error_message: Optional[str] = None,
+) -> Optional[int]:
+    resp = (
+        supabase.table("lobster_messages")
+        .insert(
+            {
+                "session_id": session_id,
+                "role": role,
+                "content": content,
+                "status": status,
+                "error_message": error_message,
+            }
+        )
+        .execute()
+    )
+    if resp.data and len(resp.data) > 0:
+        return resp.data[0]["id"]
+    return None
+
+
+def update_message(
+    message_id: int,
+    content: str,
+    status: str,
+    error_message: Optional[str] = None,
+) -> None:
+    (
+        supabase.table("lobster_messages")
+        .update(
+            {
+                "content": content,
+                "status": status,
+                "error_message": error_message,
+            }
+        )
+        .eq("id", message_id)
+        .execute()
+    )
+
+
+def mark_stale_pending_messages(session_id: str, stale_minutes: int = 5) -> None:
+    resp = (
+        supabase.table("lobster_messages")
+        .select("id, status, updated_at")
+        .eq("session_id", session_id)
+        .eq("role", "assistant")
+        .eq("status", "pending")
+        .execute()
+    )
+
+    rows = resp.data or []
+    cutoff = now_utc() - timedelta(minutes=stale_minutes)
+
+    for row in rows:
+        updated_at = parse_iso_dt(row.get("updated_at"))
+        if updated_at and updated_at < cutoff:
+            update_message(
+                row["id"],
+                content="⚠️ 上一次回覆在處理途中中斷，請重新發問。",
+                status="failed",
+                error_message="interrupted_or_closed",
+            )
+
+
 def load_messages(session_id: str) -> None:
+    mark_stale_pending_messages(session_id)
+
     resp = (
         supabase.table("lobster_messages")
         .select("id, role, content, status, error_message, created_at, updated_at")
@@ -150,44 +258,12 @@ def load_messages(session_id: str) -> None:
                 "content": row["content"],
                 "status": row.get("status", "completed"),
                 "error_message": row.get("error_message"),
+                "created_at": row.get("created_at"),
+                "updated_at": row.get("updated_at"),
             }
         )
 
     st.session_state.messages = messages
-
-
-def create_message(session_id: str, role: str, content: str, status: str = "completed") -> Optional[int]:
-    resp = (
-        supabase.table("lobster_messages")
-        .insert(
-            {
-                "session_id": session_id,
-                "role": role,
-                "content": content,
-                "status": status,
-            }
-        )
-        .execute()
-    )
-
-    if resp.data and len(resp.data) > 0:
-        return resp.data[0]["id"]
-    return None
-
-
-def update_message(message_id: int, content: str, status: str, error_message: Optional[str] = None) -> None:
-    payload = {
-        "content": content,
-        "status": status,
-        "error_message": error_message,
-    }
-
-    (
-        supabase.table("lobster_messages")
-        .update(payload)
-        .eq("id", message_id)
-        .execute()
-    )
 
 
 def update_session_title_if_needed(session_id: str, prompt: str) -> None:
@@ -204,23 +280,18 @@ def update_session_title_if_needed(session_id: str, prompt: str) -> None:
         current_title = resp.data.get("title") or "New Chat"
 
     if current_title == "New Chat":
-        new_title = prompt.strip().replace("\n", " ")[:30] or "New Chat"
         (
             supabase.table("lobster_sessions")
-            .update({"title": new_title})
+            .update({"title": shorten_text(prompt, 30)})
             .eq("id", session_id)
             .execute()
         )
 
 
 def rename_session(session_id: str, new_title: str) -> None:
-    clean_title = (new_title or "").strip()[:80]
-    if not clean_title:
-        clean_title = "New Chat"
-
     (
         supabase.table("lobster_sessions")
-        .update({"title": clean_title})
+        .update({"title": shorten_text(new_title, 80)})
         .eq("id", session_id)
         .execute()
     )
@@ -334,22 +405,15 @@ def build_content_parts(prompt: str) -> List:
     file_bytes = cached["data"]
     ext = filename.lower().split(".")[-1] if "." in filename else ""
 
-    # Excel / CSV / TXT 轉文字，比直接丟 binary 穩
     if ext in ["xlsx", "xls"]:
         excel_text = excel_bytes_to_text(file_bytes, filename)
-        content_parts.append(
-            f"\n\n以下是使用者上傳的 Excel 內容摘要：\n{excel_text}"
-        )
+        content_parts.append(f"\n\n以下是使用者上傳的 Excel 內容摘要：\n{excel_text}")
     elif ext == "csv":
         csv_text = csv_bytes_to_text(file_bytes, filename)
-        content_parts.append(
-            f"\n\n以下是使用者上傳的 CSV 內容摘要：\n{csv_text}"
-        )
+        content_parts.append(f"\n\n以下是使用者上傳的 CSV 內容摘要：\n{csv_text}")
     elif ext == "txt":
         txt_text = text_bytes_to_text(file_bytes, filename)
-        content_parts.append(
-            f"\n\n以下是使用者上傳的文字檔內容：\n{txt_text}"
-        )
+        content_parts.append(f"\n\n以下是使用者上傳的文字檔內容：\n{txt_text}")
     elif ext in ["pdf", "png", "jpg", "jpeg"]:
         content_parts.append(
             {
@@ -370,17 +434,22 @@ def build_content_parts(prompt: str) -> List:
 # =========================
 def build_history_for_model(messages: List[Dict], limit: int = 12) -> List[Dict]:
     history = []
-    for m in messages[-limit:]:
+    filtered = [m for m in messages if m["role"] in ["user", "assistant"]]
+
+    for m in filtered[-limit:]:
+        content = m.get("content", "")
+        if not content:
+            continue
         role = "user" if m["role"] == "user" else "model"
-        history.append({"role": role, "parts": [m["content"]]})
+        history.append({"role": role, "parts": [content]})
+
     return history
 
 
 def get_candidate_models() -> List[str]:
     return [
+        "gemini-2.5-flash-lite",
         "gemini-2.5-flash",
-        "gemini-1.5-flash",
-        "gemini-1.5-flash-latest",
     ]
 
 
@@ -395,46 +464,77 @@ def is_quota_error(err_text: str) -> bool:
     )
 
 
-def generate_reply_with_fallback(history: List[Dict], content_parts: List) -> Tuple[str, Optional[str]]:
-    model_names = get_candidate_models()
+def is_model_not_found(err_text: str) -> bool:
+    t = err_text.lower()
+    return (
+        "404" in t
+        or "not found" in t
+        or "unsupported" in t
+        or "is not supported" in t
+    )
+
+
+def generate_reply_with_key_rotation(
+    history: List[Dict],
+    content_parts: List,
+) -> Tuple[str, Optional[str], Optional[str]]:
+    """
+    return:
+      reply, used_model, used_key_mask
+    """
     last_error = None
 
-    for model_name in model_names:
-        try:
-            model = genai.GenerativeModel(model_name)
+    for key_idx, api_key in enumerate(API_KEY_LIST, start=1):
+        genai.configure(api_key=api_key)
 
-            for attempt in range(2):
-                try:
-                    response = model.generate_content(
-                        contents=history + [{"role": "user", "parts": content_parts}]
-                    )
-                    reply = getattr(response, "text", None)
+        for model_name in get_candidate_models():
+            try:
+                model = genai.GenerativeModel(model_name)
 
-                    if not reply:
-                        reply = "⚠️ 龍蝦有收到問題，但這次模型沒有回傳文字內容。"
+                for attempt in range(2):
+                    try:
+                        response = model.generate_content(
+                            contents=history + [{"role": "user", "parts": content_parts}]
+                        )
+                        reply = getattr(response, "text", None)
 
-                    return reply, model_name
+                        if not reply:
+                            reply = "⚠️ 龍蝦有收到問題，但這次模型沒有回傳文字內容。"
 
-                except Exception as e:
-                    err_text = str(e)
-                    last_error = err_text
-                    if is_quota_error(err_text) and attempt == 0:
-                        time.sleep(1.5)
-                        continue
-                    raise
+                        return reply, model_name, f"key-{key_idx}"
 
-        except Exception as e:
-            last_error = str(e)
-            continue
+                    except Exception as e:
+                        err_text = str(e)
+                        last_error = err_text
+
+                        if is_quota_error(err_text) and attempt == 0:
+                            time.sleep(1.2)
+                            continue
+
+                        raise
+
+            except Exception as e:
+                err_text = str(e)
+                last_error = err_text
+
+                if is_quota_error(err_text):
+                    continue
+
+                if is_model_not_found(err_text):
+                    continue
+
+                continue
 
     if last_error and is_quota_error(last_error):
         return (
-            "⚠️ 龍蝦今天的 AI 額度暫時用完了，請稍後再試，或改用新的 Google API Key / 升級額度。",
+            "🦞 今天 AI 額度暫時用完了，請稍後再試，或新增更多 API key 輪替。",
+            None,
             None,
         )
 
     return (
         f"⚠️ AI error: {last_error}" if last_error else "⚠️ AI 暫時無法回覆，請稍後再試。",
+        None,
         None,
     )
 
@@ -560,11 +660,14 @@ with st.sidebar:
             st.session_state.uploaded_file_cache = None
             st.rerun()
 
+    st.markdown("---")
+    st.caption(f"API keys loaded: {len(API_KEY_LIST)}")
+
 
 # =========================
 # Main UI
 # =========================
-st.markdown('<div class="lobster-title">🦞 龍蝦王小助手</div>', unsafe_allow_html=True)
+st.markdown('<div class="lobster-title">🦞 龍蝦王助手</div>', unsafe_allow_html=True)
 
 if not st.session_state.messages:
     st.markdown(
@@ -577,18 +680,26 @@ if not st.session_state.messages:
         unsafe_allow_html=True,
     )
 
-for msg in st.session_state.messages:
+for idx, msg in enumerate(st.session_state.messages):
     display_content = msg["content"]
 
     if msg["role"] == "assistant":
         if msg.get("status") == "pending":
             display_content = "🦞 龍蝦正在思考中..."
-        elif msg.get("status") == "failed":
-            if msg.get("error_message"):
-                display_content = f"{msg['content']}\n\n> {msg['error_message']}"
+        elif msg.get("status") == "failed" and msg.get("error_message"):
+            display_content = f"{msg['content']}\n\n> {msg['error_message']}"
 
     with st.chat_message("assistant" if msg["role"] == "assistant" else "user"):
         st.markdown(display_content)
+
+        if msg["role"] == "assistant" and msg.get("status") == "completed":
+            copy_key = f"copy_{msg.get('id', idx)}"
+            if st.button("複製回答", key=copy_key):
+                st.session_state.copy_notice = "請手動複製這段回答。"
+                st.code(msg["content"], language=None)
+
+if st.session_state.copy_notice:
+    st.caption(st.session_state.copy_notice)
 
 
 # =========================
@@ -599,14 +710,17 @@ prompt = st.chat_input("Message Lobster...")
 if prompt:
     session_id = st.session_state.active_chat_id
 
-    # 1. 先顯示 user
-    user_msg = {"role": "user", "content": prompt, "status": "completed", "error_message": None}
-    st.session_state.messages.append(user_msg)
+    user_local = {
+        "role": "user",
+        "content": prompt,
+        "status": "completed",
+        "error_message": None,
+    }
+    st.session_state.messages.append(user_local)
 
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # 2. 先寫 user 到 DB
     try:
         create_message(session_id, "user", prompt, status="completed")
         update_session_title_if_needed(session_id, prompt)
@@ -614,11 +728,16 @@ if prompt:
     except Exception as e:
         st.warning(f"Save user message failed: {e}")
 
-    # 3. 先建立 pending assistant
     pending_text = "🦞 龍蝦正在思考中..."
     pending_id = None
+
     try:
-        pending_id = create_message(session_id, "assistant", pending_text, status="pending")
+        pending_id = create_message(
+            session_id,
+            "assistant",
+            pending_text,
+            status="pending",
+        )
     except Exception as e:
         st.warning(f"Create pending assistant message failed: {e}")
 
@@ -654,18 +773,22 @@ if prompt:
             history = build_history_for_model(st.session_state.messages[:-1], limit=12)
 
             with st.spinner("龍蝦正在整理答案..."):
-                reply, used_model = generate_reply_with_fallback(history, content_parts)
+                reply, used_model, used_key = generate_reply_with_key_rotation(
+                    history, content_parts
+                )
+
+            final_status = "failed" if reply.startswith("⚠️") or reply.startswith("🦞 今天 AI 額度") else "completed"
+            final_error = reply if final_status == "failed" else None
 
             output_placeholder = st.empty()
             thinking_placeholder.empty()
 
-            if reply.startswith("⚠️"):
+            if final_status == "failed":
                 output_placeholder.markdown(reply)
             else:
                 typewriter_effect(output_placeholder, reply, speed=0.008)
-
-            final_status = "failed" if reply.startswith("⚠️") else "completed"
-            final_error = reply if final_status == "failed" else None
+                if used_model and used_key:
+                    st.caption(f"模型：{used_model} · {used_key}")
 
         except Exception as e:
             reply = f"⚠️ AI error: {e}"
@@ -673,7 +796,6 @@ if prompt:
             final_error = str(e)
             thinking_placeholder.markdown(reply)
 
-    # 4. 更新本地最後一筆 assistant
     st.session_state.messages[-1] = {
         "id": pending_id,
         "role": "assistant",
@@ -682,7 +804,6 @@ if prompt:
         "error_message": final_error,
     }
 
-    # 5. 更新資料庫裡那筆 pending assistant
     try:
         if pending_id is not None:
             update_message(
@@ -692,7 +813,13 @@ if prompt:
                 error_message=final_error,
             )
         else:
-            create_message(session_id, "assistant", reply, status=final_status)
+            create_message(
+                session_id,
+                "assistant",
+                reply,
+                status=final_status,
+                error_message=final_error,
+            )
         touch_session(session_id)
     except Exception as e:
         st.warning(f"Save assistant message failed: {e}")
