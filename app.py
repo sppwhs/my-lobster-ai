@@ -25,79 +25,207 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    #MainMenu, footer, header {visibility: hidden;}
+    #MainMenu, footer, header {
+        visibility: hidden;
+    }
+
+    html, body, [class*="css"] {
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+    }
 
     .block-container {
-        padding-top: 0.7rem;
-        padding-bottom: 1rem;
-        max-width: 920px;
+        padding-top: 0.45rem;
+        padding-bottom: 0.7rem;
+        padding-left: 0.9rem;
+        padding-right: 0.9rem;
+        max-width: 880px;
     }
 
     section[data-testid="stSidebar"] {
         display: none !important;
     }
 
+    /* Header */
+    .lobster-appbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 0.35rem;
+    }
+
+    .lobster-title-wrap {
+        min-width: 0;
+    }
+
     .lobster-title {
-        font-size: 2rem;
+        font-size: 1.5rem;
         font-weight: 800;
         margin: 0;
-        line-height: 1.15;
+        line-height: 1.1;
+        letter-spacing: -0.02em;
     }
 
     .lobster-subtle {
         color: #6b7280;
-        font-size: 0.92rem;
-        margin-top: 0.1rem;
+        font-size: 0.82rem;
+        margin-top: 0.06rem;
+        line-height: 1.2;
+    }
+
+    /* Toolbar / panels */
+    .toolbar-note {
+        color: #6b7280;
+        font-size: 0.78rem;
+        margin-top: -0.15rem;
+        margin-bottom: 0.3rem;
+    }
+
+    .panel-shell {
+        border: 1px solid #ececec;
+        border-radius: 16px;
+        padding: 0.65rem 0.7rem 0.45rem 0.7rem;
+        background: #fcfcfc;
+        margin-bottom: 0.65rem;
+    }
+
+    .panel-title {
+        font-size: 0.95rem;
+        font-weight: 700;
+        margin-bottom: 0.45rem;
     }
 
     .memory-box {
-        padding: 10px 12px;
-        border: 1px solid #eee;
-        border-radius: 14px;
-        margin-bottom: 10px;
-        background: #fafafa;
+        padding: 8px 10px;
+        border: 1px solid #efefef;
+        border-radius: 12px;
+        margin-bottom: 8px;
+        background: #ffffff;
     }
 
     .memory-title {
         font-weight: 700;
-        margin-bottom: 4px;
+        font-size: 0.92rem;
+        margin-bottom: 2px;
+        line-height: 1.25;
     }
 
     .memory-meta {
-        font-size: 0.8rem;
+        font-size: 0.75rem;
         color: #666;
-        margin-bottom: 4px;
+        margin-bottom: 3px;
     }
 
+    .memory-body {
+        font-size: 0.85rem;
+        color: #222;
+        line-height: 1.35;
+    }
+
+    /* Chat list */
     .chat-empty {
         text-align: center;
-        padding: 2.3rem 1rem 1.7rem 1rem;
+        padding: 1.6rem 0.8rem 1.2rem 0.8rem;
         color: #666;
     }
 
     .chat-empty h2 {
-        margin-bottom: 0.45rem;
-        font-size: 1.28rem;
+        margin-bottom: 0.3rem;
+        font-size: 1.08rem;
     }
 
-    .stButton > button {
+    .section-divider {
+        margin-top: 0.35rem;
+        margin-bottom: 0.45rem;
+    }
+
+    /* Streamlit element tuning */
+    div[data-testid="stChatMessage"] {
         border-radius: 14px;
     }
 
-    div[data-testid="stChatMessage"] {
-        border-radius: 16px;
+    .stButton > button {
+        border-radius: 12px !important;
+        min-height: 2.2rem !important;
+        padding: 0.32rem 0.7rem !important;
+        font-size: 0.92rem !important;
+    }
+
+    .stTextInput input, .stTextArea textarea {
+        border-radius: 12px !important;
+    }
+
+    div[data-testid="stFileUploader"] section {
+        padding: 0.35rem !important;
+        border-radius: 12px !important;
+    }
+
+    div[data-testid="stExpander"] {
+        border: none !important;
+    }
+
+    div[data-testid="stExpander"] details {
+        border: 1px solid #ececec !important;
+        border-radius: 12px !important;
+        background: white !important;
+    }
+
+    div[data-testid="stExpander"] summary {
+        padding-top: 0.4rem !important;
+        padding-bottom: 0.4rem !important;
+        font-size: 0.92rem !important;
+    }
+
+    /* compact horizontal radio */
+    div[role="radiogroup"] {
+        gap: 0.35rem;
+    }
+
+    /* reduce excessive vertical gaps */
+    .element-container {
+        margin-bottom: 0.28rem !important;
+    }
+
+    hr {
+        margin-top: 0.45rem !important;
+        margin-bottom: 0.65rem !important;
     }
 
     @media (max-width: 768px) {
         .block-container {
-            padding-top: 0.5rem;
-            padding-left: 0.8rem;
-            padding-right: 0.8rem;
+            padding-top: 0.35rem;
+            padding-left: 0.7rem;
+            padding-right: 0.7rem;
+            padding-bottom: 0.5rem;
             max-width: 100%;
         }
 
         .lobster-title {
-            font-size: 1.65rem;
+            font-size: 1.24rem;
+        }
+
+        .lobster-subtle {
+            font-size: 0.75rem;
+        }
+
+        .panel-shell {
+            padding: 0.55rem 0.55rem 0.35rem 0.55rem;
+            border-radius: 14px;
+        }
+
+        .stButton > button {
+            min-height: 2rem !important;
+            padding: 0.28rem 0.6rem !important;
+            font-size: 0.88rem !important;
+        }
+
+        .chat-empty {
+            padding: 1.15rem 0.5rem 0.9rem 0.5rem;
+        }
+
+        .chat-empty h2 {
+            font-size: 1rem;
         }
     }
     </style>
@@ -159,6 +287,9 @@ if "copy_notice" not in st.session_state:
 
 if "memory_refresh_key" not in st.session_state:
     st.session_state.memory_refresh_key = 0
+
+if "tool_panel" not in st.session_state:
+    st.session_state.tool_panel = "收起"
 
 
 # =========================
@@ -687,11 +818,22 @@ ensure_active_chat()
 # =========================
 # Header
 # =========================
-left, right = st.columns([7, 2])
-with left:
-    st.markdown('<div class="lobster-title">🦞 龍蝦王助手</div>', unsafe_allow_html=True)
-    st.markdown('<div class="lobster-subtle">你的手機版 Lobster</div>', unsafe_allow_html=True)
-with right:
+header_left, header_right = st.columns([6, 2])
+
+with header_left:
+    st.markdown(
+        """
+        <div class="lobster-appbar">
+            <div class="lobster-title-wrap">
+                <div class="lobster-title">🦞 龍蝦王助手</div>
+                <div class="lobster-subtle">更精簡的手機版 Lobster</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with header_right:
     if st.button("＋ 新對話", use_container_width=True):
         sid = create_session("New Chat")
         st.session_state.active_chat_id = sid
@@ -703,46 +845,78 @@ with right:
 
 
 # =========================
-# Fancy Top Function Cards
+# Compact Tool Switcher
 # =========================
-c1, c2, c3 = st.columns(3)
+tool_panel = st.radio(
+    "工具列",
+    ["收起", "Chats", "Upload", "Memory"],
+    horizontal=True,
+    key="tool_panel",
+    label_visibility="collapsed",
+)
+st.markdown('<div class="toolbar-note">把工具收起來後，聊天區會更大。</div>', unsafe_allow_html=True)
 
-with c1:
-    with st.container(border=True):
-        st.markdown("### 💬 Chats")
-        st.caption("聊天清單 / 切換對話")
-        with st.expander("打開 Chats", expanded=False):
-            sessions = list_sessions()
-            if not sessions:
-                st.caption("目前沒有聊天紀錄")
-            else:
-                for s in sessions[:20]:
-                    session_id = s["id"]
-                    label = s["title"] or "New Chat"
-                    active = session_id == st.session_state.active_chat_id
+if tool_panel != "收起":
+    st.markdown('<div class="panel-shell">', unsafe_allow_html=True)
 
-                    col_a, col_b, col_c = st.columns([7, 1, 1])
+    # -------------------------
+    # Chats
+    # -------------------------
+    if tool_panel == "Chats":
+        st.markdown('<div class="panel-title">💬 Chats</div>', unsafe_allow_html=True)
+        sessions = list_sessions()
 
-                    with col_a:
-                        prefix = "🟣 " if active else "⚪ "
-                        if st.button(
-                            f"{prefix}{label}",
-                            key=f"chat_{session_id}",
-                            use_container_width=True,
-                        ):
-                            st.session_state.active_chat_id = session_id
-                            load_messages(session_id)
+        if not sessions:
+            st.caption("目前沒有聊天紀錄")
+        else:
+            for s in sessions[:20]:
+                session_id = s["id"]
+                label = s["title"] or "New Chat"
+                active = session_id == st.session_state.active_chat_id
+
+                row1, row2 = st.columns([9, 1])
+
+                with row1:
+                    prefix = "🟣 " if active else "⚪ "
+                    if st.button(
+                        f"{prefix}{label}",
+                        key=f"chat_{session_id}",
+                        use_container_width=True,
+                    ):
+                        st.session_state.active_chat_id = session_id
+                        load_messages(session_id)
+                        st.session_state.rename_target = None
+                        st.rerun()
+
+                with row2:
+                    if st.button("⋯", key=f"more_{session_id}", use_container_width=True):
+                        if st.session_state.rename_target == session_id:
                             st.session_state.rename_target = None
-                            st.rerun()
-
-                    with col_b:
-                        if st.button("✏️", key=f"rename_btn_{session_id}"):
+                            st.session_state.rename_input = ""
+                        else:
                             st.session_state.rename_target = session_id
                             st.session_state.rename_input = label
+                        st.rerun()
+
+                if st.session_state.rename_target == session_id:
+                    new_title = st.text_input(
+                        "重新命名",
+                        value=st.session_state.rename_input,
+                        key=f"rename_input_{session_id}",
+                        label_visibility="collapsed",
+                        placeholder="輸入新名稱",
+                    )
+                    act1, act2, act3 = st.columns([1, 1, 1])
+
+                    with act1:
+                        if st.button("保存", key=f"rename_save_{session_id}", use_container_width=True):
+                            rename_session(session_id, new_title)
+                            st.session_state.rename_target = None
+                            st.session_state.rename_input = ""
                             st.rerun()
 
-                    with col_c:
-                        if st.button("🗑️", key=f"delete_btn_{session_id}"):
+                    with act2:
+                        if st.button("刪除", key=f"delete_btn_{session_id}", use_container_width=True):
                             delete_session(session_id)
                             if st.session_state.active_chat_id == session_id:
                                 remaining = list_sessions()
@@ -754,32 +928,21 @@ with c1:
                                     st.session_state.active_chat_id = new_id
                                     st.session_state.messages = []
                             st.session_state.rename_target = None
+                            st.session_state.rename_input = ""
                             st.rerun()
 
-                    if st.session_state.rename_target == session_id:
-                        new_title = st.text_input(
-                            "重新命名",
-                            value=st.session_state.rename_input,
-                            key=f"rename_input_{session_id}",
-                            label_visibility="collapsed",
-                        )
-                        rr1, rr2 = st.columns(2)
-                        with rr1:
-                            if st.button("保存", key=f"rename_save_{session_id}", use_container_width=True):
-                                rename_session(session_id, new_title)
-                                st.session_state.rename_target = None
-                                st.session_state.rename_input = ""
-                                st.rerun()
-                        with rr2:
-                            if st.button("取消", key=f"rename_cancel_{session_id}", use_container_width=True):
-                                st.session_state.rename_target = None
-                                st.session_state.rename_input = ""
-                                st.rerun()
+                    with act3:
+                        if st.button("取消", key=f"rename_cancel_{session_id}", use_container_width=True):
+                            st.session_state.rename_target = None
+                            st.session_state.rename_input = ""
+                            st.rerun()
 
-with c2:
-    with st.container(border=True):
-        st.markdown("### 📎 Upload")
-        st.caption("PDF / Excel / 圖片 / CSV")
+    # -------------------------
+    # Upload
+    # -------------------------
+    elif tool_panel == "Upload":
+        st.markdown('<div class="panel-title">📎 Upload</div>', unsafe_allow_html=True)
+
         uploaded_file = st.file_uploader(
             "Upload context",
             type=["txt", "pdf", "csv", "xlsx", "xls", "png", "jpg", "jpeg"],
@@ -801,14 +964,16 @@ with c2:
                 st.session_state.uploaded_file_cache = None
                 st.rerun()
 
-with c3:
-    with st.container(border=True):
-        st.markdown("### 🧠 Memory")
-        st.caption("長期記憶 / 重要資料")
+    # -------------------------
+    # Memory
+    # -------------------------
+    elif tool_panel == "Memory":
+        st.markdown('<div class="panel-title">🧠 Memory</div>', unsafe_allow_html=True)
+
         with st.expander("新增記憶", expanded=False):
             mem_title = st.text_input("記憶標題", key=f"mem_title_{st.session_state.memory_refresh_key}")
             mem_tags = st.text_input("標籤（逗號分隔）", key=f"mem_tags_{st.session_state.memory_refresh_key}")
-            mem_content = st.text_area("記憶內容", height=120, key=f"mem_content_{st.session_state.memory_refresh_key}")
+            mem_content = st.text_area("記憶內容", height=110, key=f"mem_content_{st.session_state.memory_refresh_key}")
 
             if st.button("保存記憶", use_container_width=True):
                 if mem_content.strip():
@@ -823,20 +988,25 @@ with c3:
                     st.rerun()
 
         memory_items = list_memory_items(limit=5)
-        for item in memory_items:
-            st.markdown(
-                f"""
-                <div class="memory-box">
-                    <div class="memory-title">{item.get('title', '')}</div>
-                    <div class="memory-meta">{", ".join(item.get('tags', []) or [])}</div>
-                    <div>{(item.get('content', '')[:60] + '...') if len(item.get('content', '')) > 60 else item.get('content', '')}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            if st.button("刪除", key=f"del_mem_{item['id']}", use_container_width=True):
-                delete_memory_item(item["id"])
-                st.rerun()
+        if not memory_items:
+            st.caption("目前沒有長期記憶")
+        else:
+            for item in memory_items:
+                st.markdown(
+                    f"""
+                    <div class="memory-box">
+                        <div class="memory-title">{item.get('title', '')}</div>
+                        <div class="memory-meta">{", ".join(item.get('tags', []) or [])}</div>
+                        <div class="memory-body">{(item.get('content', '')[:72] + '...') if len(item.get('content', '')) > 72 else item.get('content', '')}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                if st.button("刪除這筆記憶", key=f"del_mem_{item['id']}", use_container_width=True):
+                    delete_memory_item(item["id"])
+                    st.rerun()
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
 st.caption(f"API keys loaded: {len(API_KEY_LIST)}")
 
@@ -844,6 +1014,7 @@ st.caption(f"API keys loaded: {len(API_KEY_LIST)}")
 # =========================
 # Main Chat Area
 # =========================
+st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 st.markdown("---")
 
 if not st.session_state.messages:
@@ -851,7 +1022,7 @@ if not st.session_state.messages:
         """
         <div class="chat-empty">
             <h2>今天想問龍蝦什麼？</h2>
-            <div>上方可以操作 Chats、Upload、Memory。</div>
+            <div>上方工具列可以切換 Chats、Upload、Memory。</div>
         </div>
         """,
         unsafe_allow_html=True,
