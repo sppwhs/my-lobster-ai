@@ -13,32 +13,17 @@ genai.configure(api_key=api_key)
 model = genai.GenerativeModel('gemini-2.5-flash')
 supabase = create_client(url, key)
 
-# ================= 2. 極簡 UI 配置 =================
+# ================= 2. 介面配置 (恢復最穩定的手機模式) =================
 st.set_page_config(
     page_title="Lobster AI", 
     page_icon="🦞", 
-    layout="wide", # 寬螢幕模式
-    initial_sidebar_state="collapsed" # 手機版預設收起，保持清爽
+    initial_sidebar_state="expanded" # 強制展開，不讓它躲起來
 )
 
-# 注入 CSS：打造 ChatGPT 風格 (深色質感、隱藏多餘 UI)
-st.markdown("""
-    <style>
-    /* 隱藏 Streamlit 原生元素 */
-    #MainMenu, footer, header {visibility: hidden;}
-    .stApp {max-width: 800px; margin: 0 auto;} /* 限制寬度，對話更集中 */
-    
-    /* 側邊欄樣式優化 */
-    section[data-testid="stSidebar"] {background-color: #f9f9f9;}
-    .stButton>button {border-radius: 20px; border: 1px solid #ddd; transition: 0.3s;}
-    .stButton>button:hover {border-color: #FF4B4B; color: #FF4B4B;}
-    
-    /* 輸入框美化 */
-    .stChatInputContainer {padding-bottom: 20px;}
-    </style>
-    """, unsafe_allow_html=True)
+# 隱藏多餘 UI，但保留核心結構
+st.markdown("<style>#MainMenu, footer, header {visibility: hidden;}</style>", unsafe_allow_html=True)
 
-# ================= 3. 側邊欄 (隱藏式選單) =================
+# ================= 3. 側邊欄 (回歸最簡單的寫法，保證內容顯示) =================
 with st.sidebar:
     st.title("🦞 Lobster")
     
@@ -53,7 +38,14 @@ with st.sidebar:
         st.rerun()
     
     st.write("---")
-    # 歷史紀錄清單
+    
+    # 檔案上傳
+    uploaded_file = st.file_uploader("Upload context", type=["pdf", "txt", "csv", "xlsx", "png", "jpg", "jpeg"])
+    
+    st.write("---")
+    st.subheader("History")
+    
+    # 歷史紀錄
     try:
         resp = supabase.table("chat_history").select("session_id, content, role").order("created_at", descending=True).limit(40).execute()
         sessions = {}
@@ -69,31 +61,26 @@ with st.sidebar:
                 st.session_state.messages = [{"role": r["role"], "content": r["content"]} for r in h_resp.data]
                 st.rerun()
     except:
-        pass
+        st.write("Loading history...")
 
-    st.write("---")
-    uploaded_file = st.file_uploader("Upload context", type=["pdf", "txt", "csv", "xlsx", "png", "jpg", "jpeg"])
+# ================= 4. 主畫面 =================
+st.title("🦞 龍蝦王助手")
 
-# ================= 4. 主畫面 (對話流) =================
-# 只有對話，沒有多餘的標題或 Caption
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# ================= 5. 輸入邏輯 =================
+# ================= 5. 對話觸發 =================
 if prompt := st.chat_input("Message Lobster..."):
-    # 顯示 User
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
     
     try:
-        # 準備請求
         content_parts = [prompt]
         if uploaded_file:
             content_parts.append({"mime_type": uploaded_file.type, "data": uploaded_file.read()})
 
-        # 獲取 AI 回應 (ChatGPT 風格不顯示中途提示)
         response = model.generate_content(content_parts)
         reply = response.text
         
@@ -101,7 +88,7 @@ if prompt := st.chat_input("Message Lobster..."):
             st.markdown(reply)
         st.session_state.messages.append({"role": "assistant", "content": reply})
         
-        # 背景存檔
+        # 存檔
         supabase.table("chat_history").insert([
             {"session_id": st.session_state.current_sid, "role": "user", "content": prompt},
             {"session_id": st.session_state.current_sid, "role": "assistant", "content": reply}
@@ -110,3 +97,5 @@ if prompt := st.chat_input("Message Lobster..."):
     except Exception as e:
         if "429" in str(e):
             st.error("Too many requests. Please wait a moment.")
+        else:
+            st.error(f"Error: {e}")
