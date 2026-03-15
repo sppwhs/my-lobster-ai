@@ -1,6 +1,7 @@
 import streamlit as st
 import google.generativeai as genai
 import os
+import uuid
 from supabase import create_client
 
 # ================= 1. 安全初始化 (防洩漏) =================
@@ -20,25 +21,53 @@ model = genai.GenerativeModel('gemini-1.5-flash')
 # 設定 Supabase
 supabase = create_client(url, key)
 
-# ================= 2. 介面配置 (找回標題) =================
+# ================= 2. 網頁介面配置 (找回標題) =================
 st.set_page_config(page_title="龍蝦王小助手", page_icon="🦞")
 st.title("🦞 龍蝦王小助手")
 st.markdown("---")
 
-# ================= 3. 記憶邏輯 (核心功能回歸) =================
-# 1. 頁面啟動時，初始化 session_state
+# ================= 3. 主題分類與記憶讀取邏輯 (核心功能回歸) =================
+# 1. 初始化 session_state
+if "current_session_id" not in st.session_state:
+    st.session_state.current_session_id = None
 if "messages" not in st.session_state:
     st.session_state.messages = []
-    # 2. 從資料庫讀取所有歷史對話
-    try:
-        response = supabase.table("chat_history").select("*").order("created_at").execute()
-        # 將資料庫資料格式化並存入 session_state
-        for row in response.data:
-            st.session_state.messages.append({"role": row["role"], "content": row["content"]})
-    except:
-        pass # 第一次使用時資料庫可能是空的，忽略錯誤
 
-# 3. 在畫面上顯示所有歷史對話
+# 2. 側邊欄：顯示所有主題（對話節）
+with st.sidebar:
+    st.subheader("📁 歷史對話主題")
+    
+    # 從資料庫抓取所有不重複的 session_id，作為主題
+    try:
+        response = supabase.table("chat_history").select("session_id, content, role").execute()
+        # 整理出不重複的 session 列表，並選第一句話當主題名稱
+        all_sessions = {}
+        for row in response.data:
+            sid = row["session_id"]
+            if sid not in all_sessions and row["role"] == "user":
+                all_sessions[sid] = row["content"][:20] + "..." # 截取前 20 個字當主題名
+        
+        # 顯示所有主題供選擇
+        if st.button("➕ 開啟新對話"):
+            st.session_state.current_session_id = str(uuid.uuid4()) # 生成新的 ID
+            st.session_state.messages = [] # 清空畫面
+            st.rerun() # 重新整理網頁
+            
+        for sid, title in all_sessions.items():
+            if st.button(title, key=sid): # 點擊主題按鈕
+                st.session_state.current_session_id = sid # 切換到該 ID
+                # 重新從資料庫讀取該主題的對話
+                resp = supabase.table("chat_history").select("*").eq("session_id", sid).order("created_at").execute()
+                st.session_state.messages = [{"role": r["role"], "content": r["content"]} for r in resp.data]
+                st.rerun() # 重新整理網頁
+    except:
+        pass # 忽略錯誤（例如：第一次使用資料庫沒資料）
+
+# 3. 如果沒有選中任何主題，就生成一個新的 ID
+if st.session_state.current_session_id is None:
+    st.session_state.current_session_id = str(uuid.uuid4())
+
+# 4. 在畫面上顯示當前主題的所有對話歷史
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
@@ -47,7 +76,7 @@ for message in st.session_state.messages:
 # 在側邊欄放「+號」上傳檔案，避免干擾主對話欄
 with st.sidebar:
     st.subheader("➕ 夾帶檔案")
-    uploaded_file = st.file_uploader("選擇圖片、PDF 或文字檔", type=["pdf", "txt", "png", "jpg", "jpeg"])
+    uploaded_file = st.file_uploader("選擇圖片、PDF 或文字檔", type=["pdf", "txt", "png", "jpg", "jpeg"], key="lobster_uploader")
     if uploaded_file:
         st.info(f"📁 已就緒: {uploaded_file.name}")
 
@@ -58,8 +87,12 @@ if prompt := st.chat_input("跟龍蝦說說話..."):
     with st.chat_message("user"):
         st.markdown(prompt)
     
-    # 存入資料庫
-    supabase.table("chat_history").insert({"role": "user", "content": prompt}).execute()
+    # 存入資料庫 (包含 session_id，依主題分類)
+    supabase.table("chat_history").insert({
+        "session_id": st.session_state.current_session_id,
+        "role": "user", 
+        "content": prompt
+    }).execute()
 
     # 2. 讓龍蝦思考與回答
     with st.chat_message("assistant"):
@@ -86,6 +119,10 @@ if prompt := st.chat_input("跟龍蝦說說話..."):
             # 3. 儲存龍蝦的回答
             st.session_state.messages.append({"role": "assistant", "content": full_response})
             # 存入資料庫
-            supabase.table("chat_history").insert({"role": "assistant", "content": full_response}).execute()
-        except:
-            st.error("龍蝦稍微閃神了，請再試一次！")
+            supabase.table("chat_history").insert({
+                "session_id": st.session_state.current_session_id,
+                "role": "assistant", 
+                "content": full_response
+            }).execute()
+        except Exception as e:
+            st.error(f"龍蝦稍微閃神了，請再試一次！(錯誤: {e})")
