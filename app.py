@@ -1,11 +1,9 @@
 import os
-import uuid
 from typing import Any, Optional
 
 import streamlit as st
 import google.generativeai as genai
 from supabase import create_client
-from supabase.lib.client_options import ClientOptions
 
 
 # =========================
@@ -26,7 +24,7 @@ st.markdown(
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-APP_URL = os.getenv("APP_URL")  # 例如 https://my-lobster-ai-xxxxx.run.app
+APP_URL = os.getenv("APP_URL")
 
 missing = []
 if not SUPABASE_URL:
@@ -48,18 +46,9 @@ model = genai.GenerativeModel("gemini-2.5-flash")
 
 # =========================
 # Supabase client
-# PKCE flow 用於 OAuth code exchange
 # =========================
 def get_supabase():
-    return create_client(
-        SUPABASE_URL,
-        SUPABASE_ANON_KEY,
-        options=ClientOptions(
-            flow_type="pkce",
-            auto_refresh_token=False,
-            persist_session=False,
-        ),
-    )
+    return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 
 # =========================
@@ -92,7 +81,6 @@ def safe_getattr(obj: Any, name: str, default=None):
 
 
 def get_oauth_url(resp: Any) -> Optional[str]:
-    # supabase-py 回傳型別可能因版本不同略有差異，做保守處理
     if resp is None:
         return None
 
@@ -186,7 +174,6 @@ def create_chat_session(title: str = "New Chat") -> Optional[str]:
         return None
 
     supabase = get_supabase()
-    # 帶入使用者 session，讓 RLS 生效
     session = get_session_obj(supabase)
     if not session:
         return None
@@ -332,7 +319,6 @@ def exchange_code_if_present():
             st.session_state.user = safe_getattr(session, "user")
             st.session_state.oauth_exchanged = True
 
-            # 清掉網址上的 code，避免重新整理又交換一次
             st.query_params.clear()
             st.rerun()
     except Exception as e:
