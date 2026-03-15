@@ -1,5 +1,7 @@
 import os
+import time
 import uuid
+from typing import List, Dict, Optional, Tuple
 
 import streamlit as st
 import google.generativeai as genai
@@ -51,12 +53,7 @@ st.markdown(
         border-radius: 12px;
     }
 
-    .session-row {
-        padding: 0;
-        margin: 0;
-    }
-
-    .thinking-box {
+    .thinking-text {
         color: #666;
         font-style: italic;
     }
@@ -86,7 +83,6 @@ if missing:
     st.stop()
 
 genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel("gemini-2.5-flash")
 supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 
@@ -112,7 +108,7 @@ if "rename_input" not in st.session_state:
 # =========================
 # DB Helpers
 # =========================
-def list_sessions():
+def list_sessions() -> List[Dict]:
     resp = (
         supabase.table("lobster_sessions")
         .select("id, title, created_at, updated_at")
@@ -134,7 +130,7 @@ def create_session(title: str = "New Chat") -> str:
     return sid
 
 
-def load_messages(session_id: str):
+def load_messages(session_id: str) -> None:
     resp = (
         supabase.table("lobster_messages")
         .select("role, content, created_at")
@@ -148,7 +144,7 @@ def load_messages(session_id: str):
     ]
 
 
-def save_message(session_id: str, role: str, content: str):
+def save_message(session_id: str, role: str, content: str) -> None:
     supabase.table("lobster_messages").insert(
         {
             "session_id": session_id,
@@ -158,7 +154,7 @@ def save_message(session_id: str, role: str, content: str):
     ).execute()
 
 
-def update_session_title_if_needed(session_id: str, prompt: str):
+def update_session_title_if_needed(session_id: str, prompt: str) -> None:
     resp = (
         supabase.table("lobster_sessions")
         .select("title")
@@ -181,7 +177,7 @@ def update_session_title_if_needed(session_id: str, prompt: str):
         )
 
 
-def rename_session(session_id: str, new_title: str):
+def rename_session(session_id: str, new_title: str) -> None:
     clean_title = (new_title or "").strip()[:80]
     if not clean_title:
         clean_title = "New Chat"
@@ -194,7 +190,7 @@ def rename_session(session_id: str, new_title: str):
     )
 
 
-def delete_session(session_id: str):
+def delete_session(session_id: str) -> None:
     (
         supabase.table("lobster_sessions")
         .delete()
@@ -203,8 +199,7 @@ def delete_session(session_id: str):
     )
 
 
-def touch_session(session_id: str):
-    # 用 title 原值更新，確保 updated_at 會刷新
+def touch_session(session_id: str) -> None:
     resp = (
         supabase.table("lobster_sessions")
         .select("title")
@@ -222,7 +217,7 @@ def touch_session(session_id: str):
         )
 
 
-def ensure_active_chat():
+def ensure_active_chat() -> None:
     if st.session_state.active_chat_id:
         return
 
@@ -236,7 +231,10 @@ def ensure_active_chat():
         st.session_state.messages = []
 
 
-def build_history_for_model(messages, limit=12):
+# =========================
+# AI Helpers
+# =========================
+def build_history_for_model(messages: List[Dict], limit: int = 12) -> List[Dict]:
     history = []
     for m in messages[-limit:]:
         role = "user" if m["role"] == "user" else "model"
@@ -244,6 +242,106 @@ def build_history_for_model(messages, limit=12):
     return history
 
 
+def build_content_parts(prompt: str) -> List:
+    content_parts = [prompt]
+
+    if st.session_state.uploaded_file_cache:
+        content_parts.append(
+            {
+                "mime_type": st.session_state.uploaded_file_cache["type"],
+                "data": st.session_state.uploaded_file_cache["data"],
+            }
+        )
+
+    return content_parts
+
+
+def get_candidate_models() -> List[str]:
+    # 依序 fallback，改善 2.5 配額爆掉、1.5 某些環境不穩的問題
+    return [
+        "gemini-2.5-flash",
+        "gemini-1.5-flash",
+        "gemini-1.5-flash-latest",
+    ]
+
+
+def is_quota_error(err_text: str) -> bool:
+    t = err_text.lower()
+    return (
+        "429" in t
+        or "quota" in t
+        or "rate limit" in t
+        or "resource has been exhausted" in t
+        or "exceeded your current quota" in t
+    )
+
+
+def generate_reply_with_fallback(
+    history: List[Dict], content_parts: List
+) -> Tuple[str, Optional[str]]:
+    """
+    回傳:
+    - reply
+    - used_model
+    """
+    model_names = get_candidate_models()
+    last_error = None
+
+    for model_name in model_names:
+        try:
+            model = genai.GenerativeModel(model_name)
+
+            # 對 429 做一點點 retry，避免瞬間限流
+            for attempt in range(2):
+                try:
+                    response = model.generate_content(
+                        contents=history + [{"role": "user", "parts": content_parts}]
+                    )
+                    reply = getattr(response, "text", None)
+
+                    if not reply:
+                        reply = "⚠️ 龍蝦有收到問題，但這次模型沒有回傳文字內容。"
+
+                    return reply, model_name
+
+                except Exception as e:
+                    err_text = str(e)
+                    last_error = err_text
+
+                    # 如果是 quota / rate limit，短暫等一下再試一次
+                    if is_quota_error(err_text) and attempt == 0:
+                        time.sleep(1.5)
+                        continue
+
+                    raise
+
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+    if last_error and is_quota_error(last_error):
+        return (
+            "⚠️ 龍蝦今天的 AI 額度暫時用完了，請稍後再試，或改用新的 Google API Key / 升級額度。",
+            None,
+        )
+
+    return (
+        f"⚠️ AI error: {last_error}" if last_error else "⚠️ AI 暫時無法回覆，請稍後再試。",
+        None,
+    )
+
+
+def typewriter_effect(container, text: str, speed: float = 0.01) -> None:
+    rendered = ""
+    for ch in text:
+        rendered += ch
+        container.markdown(rendered)
+        time.sleep(speed)
+
+
+# =========================
+# Init
+# =========================
 ensure_active_chat()
 
 
@@ -358,7 +456,7 @@ with st.sidebar:
 # =========================
 # Main UI
 # =========================
-st.markdown('<div class="lobster-title">🦞 龍蝦王助手</div>', unsafe_allow_html=True)
+st.markdown('<div class="lobster-title">🦞 龍蝦王小助手</div>', unsafe_allow_html=True)
 
 if not st.session_state.messages:
     st.markdown(
@@ -399,33 +497,39 @@ if prompt:
         thinking_placeholder = st.empty()
 
         if st.session_state.uploaded_file_cache:
-            thinking_placeholder.markdown("🦞 龍蝦正在閱讀檔案並思考中...")
+            thinking_steps = [
+                "🦞 龍蝦正在閱讀檔案中...",
+                "🦞 龍蝦正在整理上下文...",
+                "🦞 龍蝦正在思考中...",
+            ]
         else:
-            thinking_placeholder.markdown("🦞 龍蝦正在思考中...")
+            thinking_steps = [
+                "🦞 龍蝦正在思考中...",
+                "🦞 龍蝦正在整理答案...",
+            ]
+
+        for step in thinking_steps:
+            thinking_placeholder.markdown(step)
 
         try:
-            content_parts = [prompt]
-
-            if st.session_state.uploaded_file_cache:
-                content_parts.append(
-                    {
-                        "mime_type": st.session_state.uploaded_file_cache["type"],
-                        "data": st.session_state.uploaded_file_cache["data"],
-                    }
-                )
-
+            content_parts = build_content_parts(prompt)
             history = build_history_for_model(st.session_state.messages[:-1], limit=12)
 
             with st.spinner("龍蝦正在整理答案..."):
-                response = model.generate_content(
-                    contents=history + [{"role": "user", "parts": content_parts}]
-                )
-                reply = response.text
+                reply, used_model = generate_reply_with_fallback(history, content_parts)
 
         except Exception as e:
             reply = f"⚠️ AI error: {e}"
+            used_model = None
 
-        thinking_placeholder.markdown(reply)
+        output_placeholder = st.empty()
+        thinking_placeholder.empty()
+
+        # 如果是錯誤訊息，就不要打字效果
+        if reply.startswith("⚠️"):
+            output_placeholder.markdown(reply)
+        else:
+            typewriter_effect(output_placeholder, reply, speed=0.008)
 
     st.session_state.messages.append({"role": "assistant", "content": reply})
 
