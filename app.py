@@ -1,8 +1,10 @@
 import os
 import time
 import uuid
+from io import BytesIO
 from typing import List, Dict, Optional, Tuple
 
+import pandas as pd
 import streamlit as st
 import google.generativeai as genai
 from supabase import create_client
@@ -133,25 +135,59 @@ def create_session(title: str = "New Chat") -> str:
 def load_messages(session_id: str) -> None:
     resp = (
         supabase.table("lobster_messages")
-        .select("role, content, created_at")
+        .select("id, role, content, status, error_message, created_at, updated_at")
         .eq("session_id", session_id)
         .order("created_at")
         .execute()
     )
-    st.session_state.messages = [
-        {"role": row["role"], "content": row["content"]}
-        for row in (resp.data or [])
-    ]
+
+    messages = []
+    for row in (resp.data or []):
+        messages.append(
+            {
+                "id": row["id"],
+                "role": row["role"],
+                "content": row["content"],
+                "status": row.get("status", "completed"),
+                "error_message": row.get("error_message"),
+            }
+        )
+
+    st.session_state.messages = messages
 
 
-def save_message(session_id: str, role: str, content: str) -> None:
-    supabase.table("lobster_messages").insert(
-        {
-            "session_id": session_id,
-            "role": role,
-            "content": content,
-        }
-    ).execute()
+def create_message(session_id: str, role: str, content: str, status: str = "completed") -> Optional[int]:
+    resp = (
+        supabase.table("lobster_messages")
+        .insert(
+            {
+                "session_id": session_id,
+                "role": role,
+                "content": content,
+                "status": status,
+            }
+        )
+        .execute()
+    )
+
+    if resp.data and len(resp.data) > 0:
+        return resp.data[0]["id"]
+    return None
+
+
+def update_message(message_id: int, content: str, status: str, error_message: Optional[str] = None) -> None:
+    payload = {
+        "content": content,
+        "status": status,
+        "error_message": error_message,
+    }
+
+    (
+        supabase.table("lobster_messages")
+        .update(payload)
+        .eq("id", message_id)
+        .execute()
+    )
 
 
 def update_session_title_if_needed(session_id: str, prompt: str) -> None:
@@ -232,6 +268,104 @@ def ensure_active_chat() -> None:
 
 
 # =========================
+# File Helpers
+# =========================
+def dataframe_to_text(df: pd.DataFrame, max_rows: int = 50, max_cols: int = 20) -> str:
+    clipped = df.iloc[:max_rows, :max_cols].copy()
+    clipped = clipped.fillna("")
+    return clipped.to_markdown(index=False)
+
+
+def excel_bytes_to_text(file_bytes: bytes, filename: str) -> str:
+    output_parts = [f"Excel file: {filename}"]
+
+    xls = pd.ExcelFile(BytesIO(file_bytes))
+    sheet_names = xls.sheet_names[:5]
+
+    for sheet_name in sheet_names:
+        try:
+            df = pd.read_excel(BytesIO(file_bytes), sheet_name=sheet_name)
+            output_parts.append(f"\n=== Sheet: {sheet_name} ===")
+            output_parts.append(f"Rows: {len(df)}, Columns: {len(df.columns)}")
+            if len(df.columns) > 0:
+                output_parts.append("Columns: " + ", ".join([str(c) for c in df.columns[:30]]))
+            if not df.empty:
+                output_parts.append(dataframe_to_text(df))
+            else:
+                output_parts.append("(empty sheet)")
+        except Exception as e:
+            output_parts.append(f"\n=== Sheet: {sheet_name} ===")
+            output_parts.append(f"Read failed: {e}")
+
+    return "\n".join(output_parts)
+
+
+def csv_bytes_to_text(file_bytes: bytes, filename: str) -> str:
+    try:
+        df = pd.read_csv(BytesIO(file_bytes))
+        parts = [
+            f"CSV file: {filename}",
+            f"Rows: {len(df)}, Columns: {len(df.columns)}",
+            "Columns: " + ", ".join([str(c) for c in df.columns[:30]]),
+            dataframe_to_text(df),
+        ]
+        return "\n".join(parts)
+    except Exception as e:
+        return f"CSV file: {filename}\nRead failed: {e}"
+
+
+def text_bytes_to_text(file_bytes: bytes, filename: str) -> str:
+    try:
+        text = file_bytes.decode("utf-8", errors="ignore")
+        return f"Text file: {filename}\n\n{text[:30000]}"
+    except Exception as e:
+        return f"Text file: {filename}\nRead failed: {e}"
+
+
+def build_content_parts(prompt: str) -> List:
+    content_parts = [prompt]
+
+    cached = st.session_state.uploaded_file_cache
+    if not cached:
+        return content_parts
+
+    filename = cached["name"]
+    mime_type = cached["type"]
+    file_bytes = cached["data"]
+    ext = filename.lower().split(".")[-1] if "." in filename else ""
+
+    # Excel / CSV / TXT 轉文字，比直接丟 binary 穩
+    if ext in ["xlsx", "xls"]:
+        excel_text = excel_bytes_to_text(file_bytes, filename)
+        content_parts.append(
+            f"\n\n以下是使用者上傳的 Excel 內容摘要：\n{excel_text}"
+        )
+    elif ext == "csv":
+        csv_text = csv_bytes_to_text(file_bytes, filename)
+        content_parts.append(
+            f"\n\n以下是使用者上傳的 CSV 內容摘要：\n{csv_text}"
+        )
+    elif ext == "txt":
+        txt_text = text_bytes_to_text(file_bytes, filename)
+        content_parts.append(
+            f"\n\n以下是使用者上傳的文字檔內容：\n{txt_text}"
+        )
+    elif ext in ["pdf", "png", "jpg", "jpeg"]:
+        content_parts.append(
+            {
+                "mime_type": mime_type,
+                "data": file_bytes,
+            }
+        )
+    else:
+        content_parts.append(
+            f"\n\n使用者上傳了一個檔案：{filename}，但目前系統無法完整解析這個格式。"
+        )
+
+    return content_parts
+
+
+# =========================
 # AI Helpers
 # =========================
 def build_history_for_model(messages: List[Dict], limit: int = 12) -> List[Dict]:
@@ -242,22 +376,7 @@ def build_history_for_model(messages: List[Dict], limit: int = 12) -> List[Dict]
     return history
 
 
-def build_content_parts(prompt: str) -> List:
-    content_parts = [prompt]
-
-    if st.session_state.uploaded_file_cache:
-        content_parts.append(
-            {
-                "mime_type": st.session_state.uploaded_file_cache["type"],
-                "data": st.session_state.uploaded_file_cache["data"],
-            }
-        )
-
-    return content_parts
-
-
 def get_candidate_models() -> List[str]:
-    # 依序 fallback，改善 2.5 配額爆掉、1.5 某些環境不穩的問題
     return [
         "gemini-2.5-flash",
         "gemini-1.5-flash",
@@ -276,14 +395,7 @@ def is_quota_error(err_text: str) -> bool:
     )
 
 
-def generate_reply_with_fallback(
-    history: List[Dict], content_parts: List
-) -> Tuple[str, Optional[str]]:
-    """
-    回傳:
-    - reply
-    - used_model
-    """
+def generate_reply_with_fallback(history: List[Dict], content_parts: List) -> Tuple[str, Optional[str]]:
     model_names = get_candidate_models()
     last_error = None
 
@@ -291,7 +403,6 @@ def generate_reply_with_fallback(
         try:
             model = genai.GenerativeModel(model_name)
 
-            # 對 429 做一點點 retry，避免瞬間限流
             for attempt in range(2):
                 try:
                     response = model.generate_content(
@@ -307,12 +418,9 @@ def generate_reply_with_fallback(
                 except Exception as e:
                     err_text = str(e)
                     last_error = err_text
-
-                    # 如果是 quota / rate limit，短暫等一下再試一次
                     if is_quota_error(err_text) and attempt == 0:
                         time.sleep(1.5)
                         continue
-
                     raise
 
         except Exception as e:
@@ -331,7 +439,7 @@ def generate_reply_with_fallback(
     )
 
 
-def typewriter_effect(container, text: str, speed: float = 0.01) -> None:
+def typewriter_effect(container, text: str, speed: float = 0.008) -> None:
     rendered = ""
     for ch in text:
         rendered += ch
@@ -435,7 +543,7 @@ with st.sidebar:
 
     uploaded_file = st.file_uploader(
         "Upload context",
-        type=["txt", "pdf", "csv", "png", "jpg", "jpeg"],
+        type=["txt", "pdf", "csv", "xlsx", "xls", "png", "jpg", "jpeg"],
         key="context_file",
     )
 
@@ -470,8 +578,17 @@ if not st.session_state.messages:
     )
 
 for msg in st.session_state.messages:
+    display_content = msg["content"]
+
+    if msg["role"] == "assistant":
+        if msg.get("status") == "pending":
+            display_content = "🦞 龍蝦正在思考中..."
+        elif msg.get("status") == "failed":
+            if msg.get("error_message"):
+                display_content = f"{msg['content']}\n\n> {msg['error_message']}"
+
     with st.chat_message("assistant" if msg["role"] == "assistant" else "user"):
-        st.markdown(msg["content"])
+        st.markdown(display_content)
 
 
 # =========================
@@ -482,16 +599,37 @@ prompt = st.chat_input("Message Lobster...")
 if prompt:
     session_id = st.session_state.active_chat_id
 
-    st.session_state.messages.append({"role": "user", "content": prompt})
+    # 1. 先顯示 user
+    user_msg = {"role": "user", "content": prompt, "status": "completed", "error_message": None}
+    st.session_state.messages.append(user_msg)
+
     with st.chat_message("user"):
         st.markdown(prompt)
 
+    # 2. 先寫 user 到 DB
     try:
-        save_message(session_id, "user", prompt)
+        create_message(session_id, "user", prompt, status="completed")
         update_session_title_if_needed(session_id, prompt)
         touch_session(session_id)
     except Exception as e:
         st.warning(f"Save user message failed: {e}")
+
+    # 3. 先建立 pending assistant
+    pending_text = "🦞 龍蝦正在思考中..."
+    pending_id = None
+    try:
+        pending_id = create_message(session_id, "assistant", pending_text, status="pending")
+    except Exception as e:
+        st.warning(f"Create pending assistant message failed: {e}")
+
+    pending_local = {
+        "id": pending_id,
+        "role": "assistant",
+        "content": pending_text,
+        "status": "pending",
+        "error_message": None,
+    }
+    st.session_state.messages.append(pending_local)
 
     with st.chat_message("assistant"):
         thinking_placeholder = st.empty()
@@ -518,23 +656,43 @@ if prompt:
             with st.spinner("龍蝦正在整理答案..."):
                 reply, used_model = generate_reply_with_fallback(history, content_parts)
 
+            output_placeholder = st.empty()
+            thinking_placeholder.empty()
+
+            if reply.startswith("⚠️"):
+                output_placeholder.markdown(reply)
+            else:
+                typewriter_effect(output_placeholder, reply, speed=0.008)
+
+            final_status = "failed" if reply.startswith("⚠️") else "completed"
+            final_error = reply if final_status == "failed" else None
+
         except Exception as e:
             reply = f"⚠️ AI error: {e}"
-            used_model = None
+            final_status = "failed"
+            final_error = str(e)
+            thinking_placeholder.markdown(reply)
 
-        output_placeholder = st.empty()
-        thinking_placeholder.empty()
+    # 4. 更新本地最後一筆 assistant
+    st.session_state.messages[-1] = {
+        "id": pending_id,
+        "role": "assistant",
+        "content": reply,
+        "status": final_status,
+        "error_message": final_error,
+    }
 
-        # 如果是錯誤訊息，就不要打字效果
-        if reply.startswith("⚠️"):
-            output_placeholder.markdown(reply)
-        else:
-            typewriter_effect(output_placeholder, reply, speed=0.008)
-
-    st.session_state.messages.append({"role": "assistant", "content": reply})
-
+    # 5. 更新資料庫裡那筆 pending assistant
     try:
-        save_message(session_id, "assistant", reply)
+        if pending_id is not None:
+            update_message(
+                pending_id,
+                content=reply,
+                status=final_status,
+                error_message=final_error,
+            )
+        else:
+            create_message(session_id, "assistant", reply, status=final_status)
         touch_session(session_id)
     except Exception as e:
         st.warning(f"Save assistant message failed: {e}")
