@@ -11,7 +11,10 @@ key = os.environ.get("SUPABASE_KEY")
 
 genai.configure(api_key=api_key)
 # 根據你的權限，使用最穩定的型號
-model = genai.GenerativeModel('gemini-2.5-flash')
+model = genai.GenerativeModel(
+    model_name='gemini-2.5-flash',
+    system_instruction="你是一隻博學多聞且幽默的龍蝦助理。你對高爾夫球、台灣期指交易、特斯拉電動車非常了解。說話風格簡潔、精準，偶爾會帶一點點幽默感，稱呼使用者為『老大』。"
+)
 supabase = create_client(url, key)
 
 st.set_page_config(page_title="龍蝦旗艦版", page_icon="🦞", layout="wide")
