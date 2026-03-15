@@ -19,8 +19,9 @@ supabase = create_client(url, key)
 
 st.set_page_config(page_title="龍蝦王小助手", page_icon="🦞")
 
-# --- 這裡就是被弄丟的標題區 ---
-st.title("🦞 龍蝦王小助手")
+# 把 st.title 換成這兩行，龍蝦會更大更有氣勢
+st.write(f"<h1>🦞 龍蝦王小助手</h1>", unsafe_allow_html=True)
+st.caption("您的專屬永恆記憶助手")
 st.markdown("---") # 加一條分隔線會更有質感
 # -------------------------
 
