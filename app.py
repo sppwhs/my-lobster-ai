@@ -14,7 +14,7 @@ if not all([api_key, url, key]):
     st.stop()
 
 genai.configure(api_key=api_key)
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-2.5-flash')
 supabase = create_client(url, key)
 
 # ================= 2. 側邊欄：主題分類與檔案管理 =================
