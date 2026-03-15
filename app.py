@@ -4,7 +4,7 @@ import os
 
 # 從雲端環境變數抓取 Key，安全又專業
 api_key = os.environ.get("GOOGLE_API_KEY")
-genai.configure(api_key="AIzaSyCoChXofNUw8Gu0xL5UjRVAJErb7mofV6M")
+genai.configure(api_key="AIzaSyAKW7Nis9FXhN4Gcez0ClnEd5LiD4zJ8VA")
 model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
 st.set_page_config(page_title="龍蝦 AI 助手", page_icon="🦞")
