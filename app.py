@@ -9,7 +9,7 @@ url = os.environ.get("SUPABASE_URL")
 key = os.environ.get("SUPABASE_KEY")
 
 genai.configure(api_key=api_key)
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-2.5-flash')
 supabase = create_client(url, key)
 
 st.set_page_config(page_title="永恆龍蝦", page_icon="🦞")
