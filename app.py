@@ -51,7 +51,7 @@ if "current_session_id" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-st.title("🦞 龍蝦助理")
+st.title("🦞 龍蝦王的小助理")
 
 # 顯示當前對話
 for message in st.session_state.messages:
