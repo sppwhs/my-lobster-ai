@@ -3,76 +3,89 @@ import google.generativeai as genai
 import os
 from supabase import create_client
 
-# --- 1. 初始化與安全設定 (保持不變) ---
-google_api_key = os.environ.get("GOOGLE_API_KEY")
-supabase_url = os.environ.get("SUPABASE_URL")
-supabase_key = os.environ.get("SUPABASE_KEY")
+# ================= 1. 安全初始化 (防洩漏) =================
+# 從 Render 的 Environment Variables 抓取金鑰
+api_key = os.environ.get("GOOGLE_API_KEY")
+url = os.environ.get("SUPABASE_URL")
+key = os.environ.get("SUPABASE_KEY")
 
-if not all([google_api_key, supabase_url, supabase_key]):
-    st.error("❌ 系統配置不足")
+if not all([api_key, url, key]):
+    st.error("❌ 系統配置不足，請檢查 Render 的環境變數設定。")
     st.stop()
 
-genai.configure(api_key=google_api_key)
-model = genai.GenerativeModel('gemini-2.5-flash')
-supabase = create_client(supabase_url, supabase_key)
+# 設定 Gemini
+genai.configure(api_key=api_key)
+model = genai.GenerativeModel('gemini-1.5-flash')
 
-# --- 2. 介面配置 ---
+# 設定 Supabase
+supabase = create_client(url, key)
+
+# ================= 2. 介面配置 (找回標題) =================
 st.set_page_config(page_title="龍蝦王小助手", page_icon="🦞")
-st.write("<h1>🦞 龍蝦王小助手</h1>", unsafe_allow_html=True)
-st.caption("您的專屬永恆記憶助手")
+st.title("🦞 龍蝦王小助手")
 st.markdown("---")
 
-# --- 3. 記憶讀取 ---
+# ================= 3. 記憶邏輯 (核心功能回歸) =================
+# 1. 頁面啟動時，初始化 session_state
 if "messages" not in st.session_state:
+    st.session_state.messages = []
+    # 2. 從資料庫讀取所有歷史對話
     try:
         response = supabase.table("chat_history").select("*").order("created_at").execute()
-        st.session_state.messages = [{"role": row["role"], "content": row["content"]} for row in response.data]
+        # 將資料庫資料格式化並存入 session_state
+        for row in response.data:
+            st.session_state.messages.append({"role": row["role"], "content": row["content"]})
     except:
-        st.session_state.messages = []
+        pass # 第一次使用時資料庫可能是空的，忽略錯誤
 
-# 顯示對話歷史
+# 3. 在畫面上顯示所有歷史對話
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# --- 4. 檔案與對話區塊 (修復核心) ---
-# 使用 st.container 確保輸入框在最下面
-container = st.container()
+# ================= 4. 對話邏輯 (修復輸入欄和+號) =================
+# 在側邊欄放「+號」上傳檔案，避免干擾主對話欄
+with st.sidebar:
+    st.subheader("➕ 夾帶檔案")
+    uploaded_file = st.file_uploader("選擇圖片、PDF 或文字檔", type=["pdf", "txt", "png", "jpg", "jpeg"])
+    if uploaded_file:
+        st.info(f"📁 已就緒: {uploaded_file.name}")
 
-with container:
-    with st.expander("➕ 夾帶檔案 (圖片、PDF)"):
-        uploaded_file = st.file_uploader("選取檔案", type=["pdf", "txt", "png", "jpg", "jpeg"], label_visibility="collapsed")
+# 主對話輸入欄
+if prompt := st.chat_input("跟龍蝦說說話..."):
+    # 1. 顯示使用者文字
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
     
-    # 使用 chat_input 並加上 key 確保狀態獨立
-    if prompt := st.chat_input("跟龍蝦聊聊吧...", key="lobster_input"):
-        # 顯示使用者文字
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-        
-        # 存入資料庫
+    # 存入資料庫
+    supabase.table("chat_history").insert({"role": "user", "content": prompt}).execute()
+
+    # 2. 讓龍蝦思考與回答
+    with st.chat_message("assistant"):
         try:
-            supabase.table("chat_history").insert({"role": "user", "content": prompt}).execute()
-        except: pass
-
-        # 龍蝦回答
-        with st.chat_message("assistant"):
-            try:
-                content_to_send = [prompt]
-                if uploaded_file:
-                    file_bytes = uploaded_file.read()
+            # 準備發送給 Gemini 的內容清單
+            content_to_send = [prompt]
+            
+            # 如果有上傳檔案，就把檔案塞進去給 Gemini 看
+            if uploaded_file is not None:
+                file_bytes = uploaded_file.read()
+                # Gemini 1.5 Flash 支援文字和圖片混合
+                if uploaded_file.type.startswith("image"):
                     content_to_send.append({"mime_type": uploaded_file.type, "data": file_bytes})
-                    st.toast(f"📎 正在分析：{uploaded_file.name}")
+                else:
+                    # 如果是文字檔或 PDF，轉成文字（這裡簡化處理，Gemini 1.5 支援直接傳 bytes）
+                    content_to_send.append({"mime_type": uploaded_file.type, "data": file_bytes})
+                st.caption(f"📎 龍蝦正在分析檔案：{uploaded_file.name}")
 
-                response = model.generate_content(content_to_send)
-                full_response = response.text
-                st.markdown(full_response)
-                
-                # 存檔
-                st.session_state.messages.append({"role": "assistant", "content": full_response})
-                supabase.table("chat_history").insert({"role": "assistant", "content": full_response}).execute()
-            except Exception as e:
-                st.error(f"龍蝦斷片了：{e}")
-
-# --- 5. 隱藏預設元件 ---
-st.markdown("<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}</style>", unsafe_allow_html=True)
+            # 發送給模型
+            response = model.generate_content(content_to_send)
+            full_response = response.text
+            st.markdown(full_response)
+            
+            # 3. 儲存龍蝦的回答
+            st.session_state.messages.append({"role": "assistant", "content": full_response})
+            # 存入資料庫
+            supabase.table("chat_history").insert({"role": "assistant", "content": full_response}).execute()
+        except:
+            st.error("龍蝦稍微閃神了，請再試一次！")
