@@ -1,33 +1,44 @@
 import streamlit as st
 import google.generativeai as genai
 import os
+import sys
 
-# 從雲端環境變數抓取 Key，安全又專業
+# 診斷資訊：檢查環境變數是否真的有讀到
 api_key = os.environ.get("GOOGLE_API_KEY")
-genai.configure(api_key="AIzaSyAKW7Nis9FXhN4Gcez0ClnEd5LiD4zJ8VA")
-model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
-st.set_page_config(page_title="龍蝦 AI 助手", page_icon="🦞")
-st.title("🦞 龍蝦 AI：您的專屬助手")
+st.set_page_config(page_title="龍蝦診斷中", page_icon="🦞")
+st.title("🦞 龍蝦自我診斷系統")
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+if not api_key:
+    st.error("❌ 診斷結果：Render 保險箱裡找不到 GOOGLE_API_KEY！請檢查 Environment 頁面。")
+else:
+    st.success("✅ 診斷結果：已成功讀取到 API Key (開頭為: " + api_key[:5] + "...)")
 
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+try:
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
 
-if prompt := st.chat_input("今天想聊什麼？"):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
 
-    with st.chat_message("assistant"):
-        try:
+    if prompt := st.chat_input("輸入測試文字..."):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        with st.chat_message("assistant"):
+            # 這裡不使用 try-except 隱藏錯誤，讓它直接噴出來
             history = [{"role": "user" if m["role"]=="user" else "model", "parts": [m["content"]]} for m in st.session_state.messages[:-1]]
             chat = model.start_chat(history=history)
             response = chat.send_message(prompt)
             st.markdown(response.text)
             st.session_state.messages.append({"role": "assistant", "content": response.text})
-        except Exception as e:
-            st.error(f"龍蝦目前忙碌中，請稍後再試。")
+
+except Exception as e:
+    # 這裡會顯示真正的錯誤原因
+    st.error(f"❌ 龍蝦崩潰原因：{type(e).__name__}")
+    st.code(str(e))
