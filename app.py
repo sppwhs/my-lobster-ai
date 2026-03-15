@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import uuid
 from io import BytesIO
@@ -29,11 +30,11 @@ st.markdown(
     .block-container {
         padding-top: 1.2rem;
         padding-bottom: 1rem;
-        max-width: 1100px;
+        max-width: 1150px;
     }
 
     section[data-testid="stSidebar"] {
-        width: 320px !important;
+        width: 340px !important;
     }
 
     .lobster-title {
@@ -56,14 +57,23 @@ st.markdown(
         border-radius: 12px;
     }
 
-    .thinking-text {
-        color: #666;
-        font-style: italic;
+    .memory-box {
+        padding: 10px 12px;
+        border: 1px solid #eee;
+        border-radius: 12px;
+        margin-bottom: 10px;
+        background: #fafafa;
     }
 
-    .status-chip {
+    .memory-title {
+        font-weight: 600;
+        margin-bottom: 4px;
+    }
+
+    .memory-meta {
         font-size: 0.8rem;
         color: #666;
+        margin-bottom: 4px;
     }
     </style>
     """,
@@ -122,6 +132,9 @@ if "rename_input" not in st.session_state:
 if "copy_notice" not in st.session_state:
     st.session_state.copy_notice = None
 
+if "memory_refresh_key" not in st.session_state:
+    st.session_state.memory_refresh_key = 0
+
 
 # =========================
 # Utility
@@ -144,8 +157,19 @@ def shorten_text(text: str, max_len: int = 80) -> str:
     return t[:max_len] if t else "New Chat"
 
 
+def tokenize(text: str) -> List[str]:
+    text = (text or "").lower()
+    tokens = re.findall(r"[\w\u4e00-\u9fff]+", text)
+    stopwords = {
+        "the", "a", "an", "to", "is", "are", "of", "and", "or", "in", "on",
+        "我", "你", "他", "她", "它", "我們", "你們", "他們", "請", "幫我", "一下",
+        "可以", "想", "要", "這個", "那個", "就是", "然後", "還有", "目前", "今天"
+    }
+    return [t for t in tokens if t not in stopwords and len(t) > 1]
+
+
 # =========================
-# DB Helpers
+# DB Helpers - Sessions / Messages
 # =========================
 def list_sessions() -> List[Dict]:
     resp = (
@@ -339,6 +363,91 @@ def ensure_active_chat() -> None:
 
 
 # =========================
+# DB Helpers - Memory
+# =========================
+def list_memory_items(limit: int = 100) -> List[Dict]:
+    resp = (
+        supabase.table("memory_items")
+        .select("id, title, content, tags, source, created_at, updated_at")
+        .order("updated_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return resp.data or []
+
+
+def create_memory_item(title: str, content: str, tags: Optional[List[str]] = None, source: str = "manual") -> None:
+    tags = tags or []
+    clean_tags = [t.strip() for t in tags if str(t).strip()]
+    supabase.table("memory_items").insert(
+        {
+            "title": shorten_text(title, 120),
+            "content": content.strip(),
+            "tags": clean_tags,
+            "source": source,
+        }
+    ).execute()
+
+
+def delete_memory_item(memory_id: str) -> None:
+    (
+        supabase.table("memory_items")
+        .delete()
+        .eq("id", memory_id)
+        .execute()
+    )
+
+
+def get_relevant_memory(query: str, top_k: int = 5) -> List[Dict]:
+    memories = list_memory_items(limit=200)
+    if not memories:
+        return []
+
+    query_tokens = set(tokenize(query))
+    scored = []
+
+    for item in memories:
+        body = f"{item.get('title', '')}\n{item.get('content', '')}\n{' '.join(item.get('tags', []) or [])}"
+        body_tokens = set(tokenize(body))
+
+        overlap = len(query_tokens.intersection(body_tokens))
+
+        # 子字串加分
+        bonus = 0
+        q = (query or "").lower()
+        if q and q in body.lower():
+            bonus += 5
+
+        score = overlap + bonus
+
+        if score > 0:
+            scored.append((score, item))
+
+    scored.sort(key=lambda x: (x[0], x[1].get("updated_at", "")), reverse=True)
+    return [item for _, item in scored[:top_k]]
+
+
+def format_memory_context(query: str) -> str:
+    relevant = get_relevant_memory(query, top_k=5)
+    if not relevant:
+        return ""
+
+    parts = ["以下是與使用者問題最相關的長期記憶，回答時可優先參考："]
+    for idx, item in enumerate(relevant, start=1):
+        parts.append(
+            f"""
+記憶 {idx}
+標題：{item.get('title', '')}
+標籤：{', '.join(item.get('tags', []) or [])}
+內容：
+{item.get('content', '')}
+""".strip()
+        )
+
+    return "\n\n".join(parts)
+
+
+# =========================
 # File Helpers
 # =========================
 def dataframe_to_text(df: pd.DataFrame, max_rows: int = 50, max_cols: int = 20) -> str:
@@ -395,6 +504,10 @@ def text_bytes_to_text(file_bytes: bytes, filename: str) -> str:
 
 def build_content_parts(prompt: str) -> List:
     content_parts = [prompt]
+
+    memory_context = format_memory_context(prompt)
+    if memory_context:
+        content_parts.append("\n\n" + memory_context)
 
     cached = st.session_state.uploaded_file_cache
     if not cached:
@@ -478,10 +591,6 @@ def generate_reply_with_key_rotation(
     history: List[Dict],
     content_parts: List,
 ) -> Tuple[str, Optional[str], Optional[str]]:
-    """
-    return:
-      reply, used_model, used_key_mask
-    """
     last_error = None
 
     for key_idx, api_key in enumerate(API_KEY_LIST, start=1):
@@ -658,6 +767,42 @@ with st.sidebar:
     if st.session_state.uploaded_file_cache:
         if st.button("清除檔案", use_container_width=True):
             st.session_state.uploaded_file_cache = None
+            st.rerun()
+
+    st.markdown("---")
+    st.markdown("### Memory")
+
+    with st.expander("新增記憶", expanded=False):
+        mem_title = st.text_input("記憶標題", key=f"mem_title_{st.session_state.memory_refresh_key}")
+        mem_tags = st.text_input("標籤（逗號分隔）", key=f"mem_tags_{st.session_state.memory_refresh_key}")
+        mem_content = st.text_area("記憶內容", height=120, key=f"mem_content_{st.session_state.memory_refresh_key}")
+
+        if st.button("保存記憶", use_container_width=True):
+            if mem_content.strip():
+                tags = [t.strip() for t in mem_tags.split(",")] if mem_tags.strip() else []
+                create_memory_item(
+                    title=mem_title or mem_content[:30],
+                    content=mem_content,
+                    tags=tags,
+                    source="manual",
+                )
+                st.session_state.memory_refresh_key += 1
+                st.rerun()
+
+    memory_items = list_memory_items(limit=20)
+    for item in memory_items[:10]:
+        st.markdown(
+            f"""
+            <div class="memory-box">
+                <div class="memory-title">{item.get('title', '')}</div>
+                <div class="memory-meta">tags: {", ".join(item.get('tags', []) or [])}</div>
+                <div>{(item.get('content', '')[:120] + '...') if len(item.get('content', '')) > 120 else item.get('content', '')}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button("刪除記憶", key=f"del_mem_{item['id']}", use_container_width=True):
+            delete_memory_item(item["id"])
             st.rerun()
 
     st.markdown("---")
