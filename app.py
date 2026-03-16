@@ -35,53 +35,84 @@ st.markdown(
         scroll-behavior: smooth;
     }
 
-    .block-container {
-        padding-top: 0.18rem;
-        padding-bottom: 0.22rem;
-        padding-left: 0.58rem;
-        padding-right: 0.58rem;
-        max-width: 820px;
-    }
-
     section[data-testid="stSidebar"] {
         display: none !important;
     }
 
-    .lobster-title {
-        font-size: 1.05rem;
+    .block-container {
+        padding-top: 0.14rem;
+        padding-bottom: 0.16rem;
+        padding-left: 0.56rem;
+        padding-right: 0.56rem;
+        max-width: 860px;
+    }
+
+    .lobster-top-anchor {
+        display: block;
+        position: relative;
+        top: -8px;
+    }
+
+    .lobster-header {
+        margin-bottom: 0.22rem;
+    }
+
+    .lobster-brand {
+        font-size: 1.02rem;
         font-weight: 800;
-        line-height: 1.03;
+        line-height: 1.05;
         letter-spacing: -0.02em;
         margin: 0;
+        color: #111827;
     }
 
-    .lobster-subtle {
+    .lobster-subtitle {
+        font-size: 0.69rem;
         color: #6b7280;
-        font-size: 0.70rem;
-        margin-top: 0.03rem;
-        line-height: 1.12;
+        line-height: 1.15;
+        margin-top: 0.02rem;
     }
 
-    .toolbar-shell {
-        margin-top: 0.28rem;
-        margin-bottom: 0.28rem;
-    }
-
-    .panel-shell {
-        border: 1px solid #ededed;
-        border-radius: 14px;
-        padding: 0.48rem;
+    .lobster-card {
+        border: 1px solid #ececec;
+        border-radius: 16px;
         background: #fcfcfd;
-        margin-bottom: 0.38rem;
+        padding: 0.5rem;
+        margin-bottom: 0.32rem;
     }
 
-    .panel-title {
-        font-size: 0.90rem;
+    .lobster-section-title {
+        font-size: 0.9rem;
         font-weight: 700;
-        margin-bottom: 0.34rem;
+        margin-bottom: 0.35rem;
+        color: #111827;
     }
 
-    .memory-box {
+    .lobster-empty {
+        text-align: center;
+        padding: 1rem 0.4rem 0.85rem 0.4rem;
+        color: #6b7280;
+    }
+
+    .lobster-empty h2 {
+        margin: 0 0 0.2rem 0;
+        font-size: 1rem;
+        color: #111827;
+    }
+
+    .lobster-jump-row {
+        margin-top: 0.08rem;
+        margin-bottom: 0.22rem;
+    }
+
+    .lobster-note {
+        font-size: 0.75rem;
+        color: #6b7280;
+        margin-top: -0.05rem;
+        margin-bottom: 0.15rem;
+    }
+
+    .lobster-memory-box {
         padding: 8px 10px;
         border: 1px solid #efefef;
         border-radius: 12px;
@@ -89,34 +120,24 @@ st.markdown(
         background: #ffffff;
     }
 
-    .memory-title {
+    .lobster-memory-title {
         font-weight: 700;
-        font-size: 0.88rem;
+        font-size: 0.87rem;
         margin-bottom: 2px;
-        line-height: 1.22;
+        line-height: 1.2;
+        color: #111827;
     }
 
-    .memory-meta {
-        font-size: 0.73rem;
-        color: #666;
+    .lobster-memory-meta {
+        font-size: 0.72rem;
+        color: #6b7280;
         margin-bottom: 3px;
     }
 
-    .memory-body {
+    .lobster-memory-body {
         font-size: 0.82rem;
-        color: #222;
+        color: #111827;
         line-height: 1.32;
-    }
-
-    .chat-empty {
-        text-align: center;
-        padding: 0.85rem 0.4rem 0.62rem 0.4rem;
-        color: #666;
-    }
-
-    .chat-empty h2 {
-        margin-bottom: 0.18rem;
-        font-size: 0.96rem;
     }
 
     .stButton > button {
@@ -129,7 +150,8 @@ st.markdown(
 
     .stTextInput input,
     .stTextArea textarea,
-    .stSelectbox div[data-baseweb="select"] > div {
+    .stSelectbox div[data-baseweb="select"] > div,
+    .stFileUploader div[data-baseweb="file-uploader"] {
         border-radius: 12px !important;
     }
 
@@ -140,114 +162,67 @@ st.markdown(
 
     div[data-testid="stExpander"] details {
         border-radius: 12px !important;
+        border: 1px solid #ececec !important;
+        background: white !important;
+    }
+
+    div[data-testid="stExpander"] summary {
+        padding-top: 0.35rem !important;
+        padding-bottom: 0.35rem !important;
+        font-size: 0.88rem !important;
     }
 
     div[data-testid="stChatMessage"] {
         border-radius: 14px;
-        padding-top: 0.04rem !important;
-        padding-bottom: 0.04rem !important;
-        margin-bottom: 0.12rem !important;
+        padding-top: 0.02rem !important;
+        padding-bottom: 0.02rem !important;
+        margin-bottom: 0.08rem !important;
     }
 
     div[data-testid="stChatMessageContent"] p {
-        line-height: 1.40;
-        font-size: 0.96rem;
+        font-size: 0.97rem;
+        line-height: 1.42;
     }
 
     .element-container {
-        margin-bottom: 0.14rem !important;
+        margin-bottom: 0.12rem !important;
     }
 
     hr {
-        margin-top: 0.12rem !important;
-        margin-bottom: 0.15rem !important;
-    }
-
-    /* Floating nav buttons */
-    .lobster-fab-wrap {
-        position: fixed;
-        right: 14px;
-        bottom: 108px;
-        z-index: 9999;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-        pointer-events: none;
-    }
-
-    .lobster-fab {
-        pointer-events: auto;
-        width: 44px;
-        height: 44px;
-        border-radius: 999px;
-        background: rgba(255,255,255,0.96);
-        border: 1px solid rgba(0,0,0,0.08);
-        box-shadow: 0 6px 18px rgba(0,0,0,0.12);
-        color: #222;
-        font-size: 18px;
-        font-weight: 700;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        text-decoration: none;
+        margin-top: 0.1rem !important;
+        margin-bottom: 0.1rem !important;
     }
 
     @media (max-width: 768px) {
         .block-container {
-            padding-top: 0.16rem;
-            padding-left: 0.56rem;
-            padding-right: 0.56rem;
-            padding-bottom: 0.20rem;
+            padding-top: 0.12rem;
+            padding-bottom: 0.14rem;
+            padding-left: 0.54rem;
+            padding-right: 0.54rem;
             max-width: 100%;
         }
 
-        .lobster-title {
-            font-size: 1.02rem;
+        .lobster-brand {
+            font-size: 0.99rem;
         }
 
-        .lobster-subtle {
-            font-size: 0.69rem;
+        .lobster-subtitle {
+            font-size: 0.68rem;
         }
 
-        .panel-shell {
+        .lobster-card {
             padding: 0.46rem;
-            border-radius: 13px;
+            border-radius: 15px;
         }
 
         .stButton > button {
-            min-height: 1.86rem !important;
+            min-height: 1.85rem !important;
             font-size: 0.83rem !important;
-        }
-
-        .lobster-fab-wrap {
-            right: 12px;
-            bottom: 104px;
-        }
-
-        .lobster-fab {
-            width: 42px;
-            height: 42px;
-            font-size: 17px;
         }
     }
     </style>
 
-    <div id="top-anchor"></div>
-
-    <script>
-    function lobsterScrollToTop() {
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-    }
-
-    function lobsterScrollToBottom() {
-        const bottom = document.getElementById("bottom-anchor");
-        if (bottom) {
-            bottom.scrollIntoView({ behavior: "smooth", block: "end" });
-        } else {
-            window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
-        }
-    }
-    </script>
+    <div id="top-anchor" class="lobster-top-anchor"></div>
     """,
     unsafe_allow_html=True,
 )
@@ -303,9 +278,6 @@ if "tool_panel" not in st.session_state:
 
 if "message_window" not in st.session_state:
     st.session_state.message_window = "最近 30 則"
-
-if "auto_jump_bottom" not in st.session_state:
-    st.session_state.auto_jump_bottom = False
 
 
 # =========================
@@ -844,18 +816,20 @@ ensure_active_chat()
 # =========================
 # Header
 # =========================
-title_col, new_col = st.columns([5.4, 2.6])
+header_left, header_right = st.columns([5.2, 2.8])
 
-with title_col:
+with header_left:
     st.markdown(
         """
-        <div class="lobster-title">🦞 龍蝦王助手</div>
-        <div class="lobster-subtle">精簡版手機介面</div>
+        <div class="lobster-header">
+            <div class="lobster-brand">🦞 龍蝦王助手</div>
+            <div class="lobster-subtitle">私人 AI 助手 v2</div>
+        </div>
         """,
         unsafe_allow_html=True,
     )
 
-with new_col:
+with header_right:
     if st.button("＋ 新對話", use_container_width=True):
         sid = create_session("New Chat")
         st.session_state.active_chat_id = sid
@@ -865,10 +839,30 @@ with new_col:
 
 
 # =========================
-# Compact Tool Switcher
+# Top Utility Row
+# =========================
+jump1, jump2 = st.columns(2)
+with jump1:
+    st.markdown(
+        '<a href="#top-anchor" style="text-decoration:none;">',
+        unsafe_allow_html=True,
+    )
+    st.button("⬆ 回頁首", use_container_width=True, key="jump_top_visual")
+    st.markdown("</a>", unsafe_allow_html=True)
+
+with jump2:
+    st.markdown(
+        '<a href="#bottom-anchor" style="text-decoration:none;">',
+        unsafe_allow_html=True,
+    )
+    st.button("⬇ 最新", use_container_width=True, key="jump_bottom_visual")
+    st.markdown("</a>", unsafe_allow_html=True)
+
+
+# =========================
+# Tool Switcher
 # =========================
 st.markdown('<div class="toolbar-shell">', unsafe_allow_html=True)
-
 tool_panel = st.radio(
     "工具列",
     ["收起", "Chats", "Upload", "Memory"],
@@ -876,15 +870,13 @@ tool_panel = st.radio(
     key="tool_panel",
     label_visibility="collapsed",
 )
-
 st.markdown("</div>", unsafe_allow_html=True)
 
 if tool_panel == "Chats":
-    st.markdown('<div class="panel-shell">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title">💬 Chats</div>', unsafe_allow_html=True)
+    st.markdown('<div class="lobster-card">', unsafe_allow_html=True)
+    st.markdown('<div class="lobster-section-title">💬 Chats</div>', unsafe_allow_html=True)
 
     sessions = list_sessions()
-
     if not sessions:
         st.caption("目前沒有聊天紀錄")
     else:
@@ -938,7 +930,6 @@ if tool_panel == "Chats":
             )
 
             c1, c2 = st.columns(2)
-
             with c1:
                 if st.button("保存名稱", use_container_width=True):
                     rename_session(st.session_state.active_chat_id, new_title)
@@ -960,8 +951,8 @@ if tool_panel == "Chats":
     st.markdown("</div>", unsafe_allow_html=True)
 
 elif tool_panel == "Upload":
-    st.markdown('<div class="panel-shell">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title">📎 Upload</div>', unsafe_allow_html=True)
+    st.markdown('<div class="lobster-card">', unsafe_allow_html=True)
+    st.markdown('<div class="lobster-section-title">📎 Upload</div>', unsafe_allow_html=True)
 
     uploaded_file = st.file_uploader(
         "Upload context",
@@ -987,8 +978,8 @@ elif tool_panel == "Upload":
     st.markdown("</div>", unsafe_allow_html=True)
 
 elif tool_panel == "Memory":
-    st.markdown('<div class="panel-shell">', unsafe_allow_html=True)
-    st.markdown('<div class="panel-title">🧠 Memory</div>', unsafe_allow_html=True)
+    st.markdown('<div class="lobster-card">', unsafe_allow_html=True)
+    st.markdown('<div class="lobster-section-title">🧠 Memory</div>', unsafe_allow_html=True)
 
     with st.expander("新增記憶", expanded=False):
         mem_title = st.text_input("記憶標題", key=f"mem_title_{st.session_state.memory_refresh_key}")
@@ -1014,10 +1005,10 @@ elif tool_panel == "Memory":
         for item in memory_items:
             st.markdown(
                 f"""
-                <div class="memory-box">
-                    <div class="memory-title">{item.get('title', '')}</div>
-                    <div class="memory-meta">{", ".join(item.get('tags', []) or [])}</div>
-                    <div class="memory-body">{(item.get('content', '')[:72] + '...') if len(item.get('content', '')) > 72 else item.get('content', '')}</div>
+                <div class="lobster-memory-box">
+                    <div class="lobster-memory-title">{item.get('title', '')}</div>
+                    <div class="lobster-memory-meta">{", ".join(item.get('tags', []) or [])}</div>
+                    <div class="lobster-memory-body">{(item.get('content', '')[:72] + '...') if len(item.get('content', '')) > 72 else item.get('content', '')}</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -1037,7 +1028,7 @@ all_messages = st.session_state.messages
 if not all_messages:
     st.markdown(
         """
-        <div class="chat-empty">
+        <div class="lobster-empty">
             <h2>今天想問什麼？</h2>
             <div>直接輸入訊息開始聊天。</div>
         </div>
@@ -1050,7 +1041,10 @@ else:
 
     if visible_count < total_count:
         hidden_count = total_count - visible_count
-        st.caption(f"已隱藏較早的 {hidden_count} 則訊息。")
+        st.markdown(
+            f'<div class="lobster-note">已隱藏較早的 {hidden_count} 則訊息。</div>',
+            unsafe_allow_html=True,
+        )
 
     messages_to_show = all_messages[-visible_count:]
 
@@ -1067,29 +1061,6 @@ else:
             st.markdown(display_content)
 
 st.markdown('<div id="bottom-anchor"></div>', unsafe_allow_html=True)
-
-st.markdown(
-    """
-    <div class="lobster-fab-wrap">
-        <a class="lobster-fab" href="javascript:void(0)" onclick="lobsterScrollToTop()">↑</a>
-        <a class="lobster-fab" href="javascript:void(0)" onclick="lobsterScrollToBottom()">↓</a>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-if st.session_state.auto_jump_bottom:
-    st.markdown(
-        """
-        <script>
-        setTimeout(() => {
-            lobsterScrollToBottom();
-        }, 120);
-        </script>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.session_state.auto_jump_bottom = False
 
 
 # =========================
@@ -1212,5 +1183,4 @@ if prompt:
     except Exception as e:
         st.warning(f"Save assistant message failed: {e}")
 
-    st.session_state.auto_jump_bottom = True
     st.rerun()
