@@ -32,6 +32,7 @@ st.markdown(
     html, body, [class*="css"] {
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
+        scroll-behavior: smooth;
     }
 
     .block-container {
@@ -118,6 +119,11 @@ st.markdown(
         font-size: 0.98rem;
     }
 
+    .quick-nav-wrap {
+        margin-top: 0.15rem;
+        margin-bottom: 0.30rem;
+    }
+
     .stButton > button {
         border-radius: 12px !important;
         min-height: 1.95rem !important;
@@ -190,6 +196,23 @@ st.markdown(
         }
     }
     </style>
+
+    <div id="top-anchor"></div>
+
+    <script>
+    function lobsterScrollToTop() {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function lobsterScrollToBottom() {
+        const bottom = document.getElementById("bottom-anchor");
+        if (bottom) {
+            bottom.scrollIntoView({ behavior: "smooth", block: "end" });
+        } else {
+            window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+        }
+    }
+    </script>
     """,
     unsafe_allow_html=True,
 )
@@ -243,6 +266,12 @@ if "memory_refresh_key" not in st.session_state:
 if "tool_panel" not in st.session_state:
     st.session_state.tool_panel = "收起"
 
+if "message_window" not in st.session_state:
+    st.session_state.message_window = "最近 30 則"
+
+if "auto_jump_bottom" not in st.session_state:
+    st.session_state.auto_jump_bottom = False
+
 
 # =========================
 # Utility
@@ -274,6 +303,56 @@ def tokenize(text: str) -> List[str]:
         "可以", "想", "要", "這個", "那個", "就是", "然後", "還有", "目前", "今天"
     }
     return [t for t in tokens if t not in stopwords and len(t) > 1]
+
+
+def get_window_size(option: str, total_count: int) -> int:
+    mapping = {
+        "最近 20 則": 20,
+        "最近 30 則": 30,
+        "最近 50 則": 50,
+        "全部顯示": total_count,
+    }
+    return mapping.get(option, 30)
+
+
+def scroll_top_button():
+    st.markdown(
+        """
+        <a href="javascript:void(0)" onclick="lobsterScrollToTop()" style="
+            text-decoration:none;
+            display:inline-block;
+            width:100%;
+            text-align:center;
+            padding:10px 12px;
+            border:1px solid #e8e8e8;
+            border-radius:12px;
+            color:#222;
+            background:#fff;
+            font-size:0.9rem;
+        ">⬆ 回到頁首</a>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def scroll_bottom_button():
+    st.markdown(
+        """
+        <a href="javascript:void(0)" onclick="lobsterScrollToBottom()" style="
+            text-decoration:none;
+            display:inline-block;
+            width:100%;
+            text-align:center;
+            padding:10px 12px;
+            border:1px solid #e8e8e8;
+            border-radius:12px;
+            color:#222;
+            background:#fff;
+            font-size:0.9rem;
+        ">⬇ 跳到最新</a>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 # =========================
@@ -949,9 +1028,33 @@ elif tool_panel == "Memory":
 
 
 # =========================
+# Quick Navigation
+# =========================
+st.markdown('<div class="quick-nav-wrap">', unsafe_allow_html=True)
+nav1, nav2, nav3 = st.columns([1, 1, 1.2])
+
+with nav1:
+    scroll_top_button()
+
+with nav2:
+    scroll_bottom_button()
+
+with nav3:
+    st.selectbox(
+        "訊息顯示數量",
+        ["最近 20 則", "最近 30 則", "最近 50 則", "全部顯示"],
+        key="message_window",
+        label_visibility="collapsed",
+    )
+st.markdown("</div>", unsafe_allow_html=True)
+
+
+# =========================
 # Main Chat Area
 # =========================
-if not st.session_state.messages:
+all_messages = st.session_state.messages
+
+if not all_messages:
     st.markdown(
         """
         <div class="chat-empty">
@@ -961,18 +1064,42 @@ if not st.session_state.messages:
         """,
         unsafe_allow_html=True,
     )
+else:
+    total_count = len(all_messages)
+    visible_count = get_window_size(st.session_state.message_window, total_count)
 
-for msg in st.session_state.messages:
-    display_content = msg["content"]
+    if visible_count < total_count:
+        hidden_count = total_count - visible_count
+        st.caption(f"已隱藏較早的 {hidden_count} 則訊息，降低滑動距離。")
 
-    if msg["role"] == "assistant":
-        if msg.get("status") == "pending":
-            display_content = "🦞 龍蝦正在思考中..."
-        elif msg.get("status") == "failed" and msg.get("error_message"):
-            display_content = f"{msg['content']}\n\n> {msg['error_message']}"
+    messages_to_show = all_messages[-visible_count:]
 
-    with st.chat_message("assistant" if msg["role"] == "assistant" else "user"):
-        st.markdown(display_content)
+    for msg in messages_to_show:
+        display_content = msg["content"]
+
+        if msg["role"] == "assistant":
+            if msg.get("status") == "pending":
+                display_content = "🦞 龍蝦正在思考中..."
+            elif msg.get("status") == "failed" and msg.get("error_message"):
+                display_content = f"{msg['content']}\n\n> {msg['error_message']}"
+
+        with st.chat_message("assistant" if msg["role"] == "assistant" else "user"):
+            st.markdown(display_content)
+
+st.markdown('<div id="bottom-anchor"></div>', unsafe_allow_html=True)
+
+if st.session_state.auto_jump_bottom:
+    st.markdown(
+        """
+        <script>
+        setTimeout(() => {
+            lobsterScrollToBottom();
+        }, 120);
+        </script>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.session_state.auto_jump_bottom = False
 
 
 # =========================
@@ -1095,4 +1222,5 @@ if prompt:
     except Exception as e:
         st.warning(f"Save assistant message failed: {e}")
 
+    st.session_state.auto_jump_bottom = True
     st.rerun()
