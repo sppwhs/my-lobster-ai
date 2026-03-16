@@ -36,10 +36,10 @@ st.markdown(
     }
 
     .block-container {
-        padding-top: 0.22rem;
-        padding-bottom: 0.25rem;
-        padding-left: 0.65rem;
-        padding-right: 0.65rem;
+        padding-top: 0.18rem;
+        padding-bottom: 0.22rem;
+        padding-left: 0.58rem;
+        padding-right: 0.58rem;
         max-width: 820px;
     }
 
@@ -48,7 +48,7 @@ st.markdown(
     }
 
     .lobster-title {
-        font-size: 1.10rem;
+        font-size: 1.05rem;
         font-weight: 800;
         line-height: 1.03;
         letter-spacing: -0.02em;
@@ -57,28 +57,28 @@ st.markdown(
 
     .lobster-subtle {
         color: #6b7280;
-        font-size: 0.72rem;
+        font-size: 0.70rem;
         margin-top: 0.03rem;
-        line-height: 1.15;
+        line-height: 1.12;
     }
 
     .toolbar-shell {
-        margin-top: 0.34rem;
-        margin-bottom: 0.34rem;
+        margin-top: 0.28rem;
+        margin-bottom: 0.28rem;
     }
 
     .panel-shell {
         border: 1px solid #ededed;
         border-radius: 14px;
-        padding: 0.52rem;
+        padding: 0.48rem;
         background: #fcfcfd;
-        margin-bottom: 0.42rem;
+        margin-bottom: 0.38rem;
     }
 
     .panel-title {
-        font-size: 0.92rem;
+        font-size: 0.90rem;
         font-weight: 700;
-        margin-bottom: 0.36rem;
+        margin-bottom: 0.34rem;
     }
 
     .memory-box {
@@ -110,25 +110,20 @@ st.markdown(
 
     .chat-empty {
         text-align: center;
-        padding: 0.95rem 0.45rem 0.7rem 0.45rem;
+        padding: 0.85rem 0.4rem 0.62rem 0.4rem;
         color: #666;
     }
 
     .chat-empty h2 {
-        margin-bottom: 0.2rem;
-        font-size: 0.98rem;
-    }
-
-    .quick-nav-wrap {
-        margin-top: 0.15rem;
-        margin-bottom: 0.30rem;
+        margin-bottom: 0.18rem;
+        font-size: 0.96rem;
     }
 
     .stButton > button {
         border-radius: 12px !important;
-        min-height: 1.95rem !important;
-        padding: 0.22rem 0.68rem !important;
-        font-size: 0.88rem !important;
+        min-height: 1.9rem !important;
+        padding: 0.22rem 0.66rem !important;
+        font-size: 0.84rem !important;
         box-shadow: none !important;
     }
 
@@ -149,50 +144,90 @@ st.markdown(
 
     div[data-testid="stChatMessage"] {
         border-radius: 14px;
-        padding-top: 0.05rem !important;
-        padding-bottom: 0.05rem !important;
-        margin-bottom: 0.15rem !important;
+        padding-top: 0.04rem !important;
+        padding-bottom: 0.04rem !important;
+        margin-bottom: 0.12rem !important;
     }
 
     div[data-testid="stChatMessageContent"] p {
-        line-height: 1.42;
+        line-height: 1.40;
         font-size: 0.96rem;
     }
 
     .element-container {
-        margin-bottom: 0.16rem !important;
+        margin-bottom: 0.14rem !important;
     }
 
     hr {
-        margin-top: 0.15rem !important;
-        margin-bottom: 0.18rem !important;
+        margin-top: 0.12rem !important;
+        margin-bottom: 0.15rem !important;
+    }
+
+    /* Floating nav buttons */
+    .lobster-fab-wrap {
+        position: fixed;
+        right: 14px;
+        bottom: 108px;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        pointer-events: none;
+    }
+
+    .lobster-fab {
+        pointer-events: auto;
+        width: 44px;
+        height: 44px;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.96);
+        border: 1px solid rgba(0,0,0,0.08);
+        box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+        color: #222;
+        font-size: 18px;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
     }
 
     @media (max-width: 768px) {
         .block-container {
-            padding-top: 0.18rem;
-            padding-left: 0.58rem;
-            padding-right: 0.58rem;
-            padding-bottom: 0.22rem;
+            padding-top: 0.16rem;
+            padding-left: 0.56rem;
+            padding-right: 0.56rem;
+            padding-bottom: 0.20rem;
             max-width: 100%;
         }
 
         .lobster-title {
-            font-size: 1.05rem;
+            font-size: 1.02rem;
         }
 
         .lobster-subtle {
-            font-size: 0.70rem;
+            font-size: 0.69rem;
         }
 
         .panel-shell {
-            padding: 0.48rem;
+            padding: 0.46rem;
             border-radius: 13px;
         }
 
         .stButton > button {
-            min-height: 1.9rem !important;
-            font-size: 0.84rem !important;
+            min-height: 1.86rem !important;
+            font-size: 0.83rem !important;
+        }
+
+        .lobster-fab-wrap {
+            right: 12px;
+            bottom: 104px;
+        }
+
+        .lobster-fab {
+            width: 42px;
+            height: 42px;
+            font-size: 17px;
         }
     }
     </style>
@@ -313,46 +348,6 @@ def get_window_size(option: str, total_count: int) -> int:
         "全部顯示": total_count,
     }
     return mapping.get(option, 30)
-
-
-def scroll_top_button():
-    st.markdown(
-        """
-        <a href="javascript:void(0)" onclick="lobsterScrollToTop()" style="
-            text-decoration:none;
-            display:inline-block;
-            width:100%;
-            text-align:center;
-            padding:10px 12px;
-            border:1px solid #e8e8e8;
-            border-radius:12px;
-            color:#222;
-            background:#fff;
-            font-size:0.9rem;
-        ">⬆ 回到頁首</a>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def scroll_bottom_button():
-    st.markdown(
-        """
-        <a href="javascript:void(0)" onclick="lobsterScrollToBottom()" style="
-            text-decoration:none;
-            display:inline-block;
-            width:100%;
-            text-align:center;
-            padding:10px 12px;
-            border:1px solid #e8e8e8;
-            border-radius:12px;
-            color:#222;
-            background:#fff;
-            font-size:0.9rem;
-        ">⬇ 跳到最新</a>
-        """,
-        unsafe_allow_html=True,
-    )
 
 
 # =========================
@@ -922,6 +917,13 @@ if tool_panel == "Chats":
             load_messages(selected_session_id)
             st.rerun()
 
+        st.selectbox(
+            "訊息顯示數量",
+            ["最近 20 則", "最近 30 則", "最近 50 則", "全部顯示"],
+            key="message_window",
+            label_visibility="collapsed",
+        )
+
         with st.expander("管理目前對話", expanded=False):
             active_title = next(
                 (s["title"] for s in sessions if s["id"] == st.session_state.active_chat_id),
@@ -1028,28 +1030,6 @@ elif tool_panel == "Memory":
 
 
 # =========================
-# Quick Navigation
-# =========================
-st.markdown('<div class="quick-nav-wrap">', unsafe_allow_html=True)
-nav1, nav2, nav3 = st.columns([1, 1, 1.2])
-
-with nav1:
-    scroll_top_button()
-
-with nav2:
-    scroll_bottom_button()
-
-with nav3:
-    st.selectbox(
-        "訊息顯示數量",
-        ["最近 20 則", "最近 30 則", "最近 50 則", "全部顯示"],
-        key="message_window",
-        label_visibility="collapsed",
-    )
-st.markdown("</div>", unsafe_allow_html=True)
-
-
-# =========================
 # Main Chat Area
 # =========================
 all_messages = st.session_state.messages
@@ -1070,7 +1050,7 @@ else:
 
     if visible_count < total_count:
         hidden_count = total_count - visible_count
-        st.caption(f"已隱藏較早的 {hidden_count} 則訊息，降低滑動距離。")
+        st.caption(f"已隱藏較早的 {hidden_count} 則訊息。")
 
     messages_to_show = all_messages[-visible_count:]
 
@@ -1087,6 +1067,16 @@ else:
             st.markdown(display_content)
 
 st.markdown('<div id="bottom-anchor"></div>', unsafe_allow_html=True)
+
+st.markdown(
+    """
+    <div class="lobster-fab-wrap">
+        <a class="lobster-fab" href="javascript:void(0)" onclick="lobsterScrollToTop()">↑</a>
+        <a class="lobster-fab" href="javascript:void(0)" onclick="lobsterScrollToBottom()">↓</a>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 if st.session_state.auto_jump_bottom:
     st.markdown(
