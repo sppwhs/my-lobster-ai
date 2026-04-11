@@ -88,6 +88,17 @@ def time_to_expiry_years(expiry: date) -> float:
     T = (exp_dt - now).total_seconds() / (365 * 24 * 3600)
     return max(T, 1/(365*24*12))
 
+def is_market_open() -> bool:
+    """判斷台灣期貨市場是否開盤（含夜盤）"""
+    from datetime import timezone
+    tz_tw = timezone(timedelta(hours=8))
+    now = datetime.now(tz_tw)
+    wd = now.weekday()  # 0=Mon 6=Sun
+    t = now.hour * 60 + now.minute
+    if wd == 6: return False                         # 週日全天收盤
+    if wd == 5: return t < 5 * 60                   # 週六只有凌晨夜盤尾段
+    return (8*60+45 <= t <= 13*60+30) or t >= 15*60 or t < 5*60  # 日盤/夜盤
+
 # ─────────────────────────────────────────────
 # 到期日計算
 # ─────────────────────────────────────────────
@@ -171,11 +182,13 @@ def fetch_underlying():
     try:
         r = requests.post(BASE+"getQuoteDetail",
             json={"SymbolID":["TXO-Q","TXFD6-F"]},
-            headers=HDRS, timeout=8, verify=False)
+            headers=HDRS, timeout=8, verify=False, allow_redirects=False)
+        if r.status_code != 200:
+            return 0.0, 0.0
         ql = r.json().get("RtData",{}).get("QuoteList",[])
         spot = fut = 0.0
         for q in ql:
-            try: val = float(q.get("CLastPrice") or q.get("CRefPrice") or 0)
+            try: val = float(q.get("CLastPrice") or 0)
             except: val = 0.0
             if q.get("SymbolID") == "TXO-Q": spot = val
             elif "TXF" in q.get("SymbolID",""): fut = val
@@ -377,23 +390,30 @@ def refresh_loop():
             interval = 6
             log = []
             try:
-                log.append("step1:fetch_underlying")
-                spot, fut = fetch_underlying()
-                log.append(f"step1_done:spot={spot}")
-                market_status = "即時"
+                market_open = is_market_open()
+                log.append(f"step1:market_open={market_open}")
 
-                if spot <= 0:
-                    log.append("step2:fetch_yahoo")
-                    spot = fetch_spot_yahoo()
-                    fut = spot
+                spot = fut = 0.0
+                if market_open:
+                    spot, fut = fetch_underlying()
+                log.append(f"step1_done:spot={spot}")
+
+                if spot <= 0 or not market_open:
+                    # 收盤：用 Yahoo Finance 取最新收盤價
+                    if spot <= 0:
+                        log.append("step2:fetch_yahoo")
+                        spot = fetch_spot_yahoo()
+                        fut = spot
+                        log.append(f"step2_done:spot={spot}")
                     market_status = "收盤"
                     interval = 300
-                    log.append(f"step2_done:spot={spot}")
                     if spot <= 0:
                         log.append("step2_fail:spot=0")
                         _refresh_log = log
-                        time.sleep(30)
+                        time.sleep(60)
                         continue
+                else:
+                    market_status = "即時"
 
                 log.append("step3:hv")
                 if time.time() - _hv_last_fetch > 3600:
