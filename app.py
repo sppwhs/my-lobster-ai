@@ -221,19 +221,54 @@ def fetch_hv_local() -> Optional[float]:
         return None
 
 def fetch_spot_yahoo() -> float:
-    """市場收盤時從 Yahoo Finance 取台股加權指數最新收盤價"""
+    """市場收盤時從多個來源取台股加權指數最新收盤價"""
+    # 來源1: Yahoo Finance
     try:
         r = requests.get(
             "https://query1.finance.yahoo.com/v8/finance/chart/%5ETWII",
             params={"interval": "1d", "range": "5d"},
-            headers={"User-Agent": "Mozilla/5.0"},
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
             timeout=10
         )
-        result = r.json()["chart"]["result"][0]
-        closes = [c for c in result["indicators"]["quote"][0].get("close", []) if c is not None]
-        return round(float(closes[-1]), 2) if closes else 0.0
+        if r.status_code == 200:
+            result = r.json()["chart"]["result"][0]
+            closes = [c for c in result["indicators"]["quote"][0].get("close", []) if c is not None]
+            if closes:
+                return round(float(closes[-1]), 2)
     except:
-        return 0.0
+        pass
+    # 來源2: Yahoo Finance v7
+    try:
+        r = requests.get(
+            "https://query2.finance.yahoo.com/v8/finance/chart/%5ETWII",
+            params={"interval": "1d", "range": "5d"},
+            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"},
+            timeout=10
+        )
+        if r.status_code == 200:
+            result = r.json()["chart"]["result"][0]
+            closes = [c for c in result["indicators"]["quote"][0].get("close", []) if c is not None]
+            if closes:
+                return round(float(closes[-1]), 2)
+    except:
+        pass
+    # 來源3: TWSE 官方 API (台灣證交所)
+    try:
+        today = datetime.now().strftime("%Y%m%d")
+        r = requests.get(
+            f"https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX",
+            params={"response": "json", "date": today, "type": "IND"},
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.twse.com.tw"},
+            timeout=10
+        )
+        data = r.json()
+        for row in data.get("data", []):
+            if row and "發行量加權股價指數" in str(row):
+                val = str(row[-2] if len(row) > 2 else row[-1]).replace(",", "")
+                return round(float(val), 2)
+    except:
+        pass
+    return 0.0
 
 def build_chain_data_closed(contract: dict, spot: float, hv: float) -> list:
     """市場收盤時的理論選擇權鏈（不呼叫 MIS API，純 BS 計算）"""
@@ -412,6 +447,39 @@ def api_chain():
 @app.route("/health")
 def health():
     return "ok", 200
+
+@app.route("/debug")
+def debug():
+    """診斷端點：回傳快取狀態與備援測試"""
+    yahoo1, yahoo2, twse = 0.0, 0.0, 0.0
+    try:
+        r = requests.get("https://query1.finance.yahoo.com/v8/finance/chart/%5ETWII",
+            params={"interval":"1d","range":"5d"},
+            headers={"User-Agent":"Mozilla/5.0"},timeout=8)
+        if r.status_code == 200:
+            closes = [c for c in r.json()["chart"]["result"][0]["indicators"]["quote"][0].get("close",[]) if c]
+            yahoo1 = round(float(closes[-1]),2) if closes else 0.0
+    except Exception as e:
+        yahoo1 = f"err:{e}"
+    try:
+        r = requests.get("https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX",
+            params={"response":"json","date":datetime.now().strftime("%Y%m%d"),"type":"IND"},
+            headers={"User-Agent":"Mozilla/5.0","Referer":"https://www.twse.com.tw"},timeout=8)
+        data = r.json()
+        for row in data.get("data",[]):
+            if row and "發行量加權股價指數" in str(row):
+                twse = str(row[-2] if len(row)>2 else row[-1]).replace(",","")
+                break
+    except Exception as e:
+        twse = f"err:{e}"
+    with _lock:
+        return jsonify({
+            "cache_ready": _cache["ready"],
+            "cache_spot": _cache["spot"],
+            "cache_market_status": _cache.get("market_status"),
+            "yahoo1": yahoo1,
+            "twse": twse,
+        })
 
 HTML = r"""<!DOCTYPE html>
 <html lang="zh-TW">
