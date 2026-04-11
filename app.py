@@ -370,86 +370,109 @@ def build_chain_data(contract, spot, hv, compute_atm=False):
     return result
 
 def refresh_loop():
+    import traceback as _tb
     global _hv_last_fetch, _hv_value, _last_error, _refresh_log
     while True:
-        interval = 6
-        log = []
         try:
-            log.append("step1:fetch_underlying")
-            spot, fut = fetch_underlying()
-            log.append(f"step1_done:spot={spot}")
-            market_status = "即時"
+            interval = 6
+            log = []
+            try:
+                log.append("step1:fetch_underlying")
+                spot, fut = fetch_underlying()
+                log.append(f"step1_done:spot={spot}")
+                market_status = "即時"
 
-            if spot <= 0:
-                log.append("step2:fetch_yahoo")
-                spot = fetch_spot_yahoo()
-                fut = spot
-                market_status = "收盤"
-                interval = 300
-                log.append(f"step2_done:spot={spot}")
                 if spot <= 0:
-                    log.append("step2_fail:spot=0")
-                    _refresh_log = log
-                    time.sleep(30); continue
+                    log.append("step2:fetch_yahoo")
+                    spot = fetch_spot_yahoo()
+                    fut = spot
+                    market_status = "收盤"
+                    interval = 300
+                    log.append(f"step2_done:spot={spot}")
+                    if spot <= 0:
+                        log.append("step2_fail:spot=0")
+                        _refresh_log = log
+                        time.sleep(30)
+                        continue
 
-            log.append("step3:hv")
-            if time.time() - _hv_last_fetch > 3600:
-                _hv_value = fetch_hv_local() or 0.0
-                _hv_last_fetch = time.time()
-            hv = _hv_value or 25.0
-            log.append(f"step3_done:hv={hv}")
+                log.append("step3:hv")
+                if time.time() - _hv_last_fetch > 3600:
+                    _hv_value = fetch_hv_local() or 0.0
+                    _hv_last_fetch = time.time()
+                hv = _hv_value or 25.0
+                log.append(f"step3_done:hv={hv}")
 
-            log.append("step4:get_contracts")
-            contracts_meta = get_active_contracts()
-            log.append(f"step4_done:n={len(contracts_meta)}")
+                log.append("step4:get_contracts")
+                contracts_meta = get_active_contracts()
+                log.append(f"step4_done:n={len(contracts_meta)}")
 
-            results = []
-            for ci, c in enumerate(contracts_meta):
-                log.append(f"step5_{ci}:build_chain:{c['label']}")
-                if market_status == "收盤":
-                    chain = build_chain_data_closed(c, spot, hv)
-                else:
-                    chain = build_chain_data(c, spot, hv, compute_atm=(ci==0 and hv<=0))
-                    if ci == 0 and hv <= 0:
-                        atm_iv = compute_atm_iv(spot, c, fetch_option_chain(c, spot, wings=3))
-                        if atm_iv:
-                            hv = atm_iv
-                results.append({
-                    "label": c["label"],
-                    "expiry_str": c["expiry"].strftime("%Y/%m/%d"),
-                    "days_left": (c["expiry"] - date.today()).days,
-                    "chain": chain,
-                })
-                log.append(f"step5_{ci}_done:rows={len(chain)}")
+                results = []
+                for ci, c in enumerate(contracts_meta):
+                    log.append(f"step5_{ci}:build:{c['label'][:8]}")
+                    if market_status == "收盤":
+                        chain = build_chain_data_closed(c, spot, hv)
+                    else:
+                        chain = build_chain_data(c, spot, hv, compute_atm=(ci==0 and hv<=0))
+                        if ci == 0 and hv <= 0:
+                            atm_iv = compute_atm_iv(spot, c, fetch_option_chain(c, spot, wings=3))
+                            if atm_iv:
+                                hv = atm_iv
+                    results.append({
+                        "label": c["label"],
+                        "expiry_str": c["expiry"].strftime("%Y/%m/%d"),
+                        "days_left": (c["expiry"] - date.today()).days,
+                        "chain": chain,
+                    })
+                    log.append(f"step5_{ci}_done:rows={len(chain)}")
 
-            log.append("step6:update_cache")
-            hv_source = "HV" if fetch_hv_local() else "ATM-IV"
-            with _lock:
-                _cache.update({
-                    "spot":spot,"fut":fut,"hv":hv,"hv_source":hv_source,
-                    "update_time":datetime.now().strftime("%H:%M:%S"),
-                    "contracts":results,"ready":True,
-                    "market_status": market_status,
-                })
-            log.append("step6_done:ready=True")
-            _refresh_log = log
-        except Exception as e:
-            import traceback
-            _last_error = traceback.format_exc()
-            log.append(f"EXCEPTION:{e}")
-            _refresh_log = log
-            print(f"[refresh error] {_last_error}")
-            interval = 30
-        time.sleep(interval)
+                log.append("step6:update_cache")
+                hv_source = "HV" if fetch_hv_local() else "ATM-IV"
+                with _lock:
+                    _cache.update({
+                        "spot": spot, "fut": fut, "hv": hv, "hv_source": hv_source,
+                        "update_time": datetime.now().strftime("%H:%M:%S"),
+                        "contracts": results, "ready": True,
+                        "market_status": market_status,
+                    })
+                log.append("step6_done:ready=True")
+                _refresh_log = log
+            except Exception as e:
+                _last_error = _tb.format_exc()
+                log.append(f"EXCEPTION:{e}")
+                _refresh_log = log
+                print(f"[refresh error] {_last_error}")
+                interval = 30
+            time.sleep(interval)
+        except BaseException as e:
+            # 捕捉 SystemExit/KeyboardInterrupt 等，防止 thread 死亡
+            _last_error = f"BaseException:{_tb.format_exc()}"
+            print(f"[refresh FATAL] {e}")
+            try: time.sleep(10)
+            except: pass
 
 # ─────────────────────────────────────────────
 # Flask App
 # ─────────────────────────────────────────────
 app = Flask(__name__)
 
-# 啟動背景刷新（gunicorn 也會執行這行）
-_refresh_thread = threading.Thread(target=refresh_loop, daemon=True)
-_refresh_thread.start()
+def _start_refresh_thread():
+    t = threading.Thread(target=refresh_loop, daemon=True)
+    t.start()
+    return t
+
+_refresh_thread = _start_refresh_thread()
+
+def _watchdog():
+    """監控 refresh_thread，若死亡則重啟"""
+    global _refresh_thread
+    while True:
+        time.sleep(30)
+        if not _refresh_thread.is_alive():
+            print("[watchdog] refresh_thread died, restarting...")
+            _refresh_thread = _start_refresh_thread()
+
+_watchdog_thread = threading.Thread(target=_watchdog, daemon=True)
+_watchdog_thread.start()
 
 @app.route("/api/chain")
 def api_chain():
