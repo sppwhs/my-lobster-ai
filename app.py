@@ -385,6 +385,8 @@ def build_chain_data(contract, spot, hv, compute_atm=False):
 def refresh_loop():
     import traceback as _tb
     global _hv_last_fetch, _hv_value, _last_error, _refresh_log
+    _refresh_log = [f"THREAD_STARTED_AT:{datetime.now().isoformat()}"]
+    print(f"[refresh_loop] started pid={os.getpid()} tid={threading.current_thread().ident}")
     while True:
         try:
             interval = 6
@@ -476,23 +478,36 @@ def refresh_loop():
 app = Flask(__name__)
 
 def _start_refresh_thread():
-    t = threading.Thread(target=refresh_loop, daemon=True)
+    t = threading.Thread(target=refresh_loop, daemon=True, name="refresh")
     t.start()
+    print(f"[_start_refresh_thread] started, alive={t.is_alive()} pid={os.getpid()}")
     return t
 
-_refresh_thread = _start_refresh_thread()
+# 延遲啟動：在第一個 HTTP request 到來後才啟動（避免 gunicorn fork 後 thread 消失）
+_refresh_thread = None
+_thread_start_lock = threading.Lock()
+
+def _ensure_refresh_thread():
+    global _refresh_thread
+    with _thread_start_lock:
+        if _refresh_thread is None or not _refresh_thread.is_alive():
+            _refresh_thread = _start_refresh_thread()
 
 def _watchdog():
     """監控 refresh_thread，若死亡則重啟"""
     global _refresh_thread
     while True:
         time.sleep(30)
-        if not _refresh_thread.is_alive():
+        if _refresh_thread is None or not _refresh_thread.is_alive():
             print("[watchdog] refresh_thread died, restarting...")
-            _refresh_thread = _start_refresh_thread()
+            _ensure_refresh_thread()
 
-_watchdog_thread = threading.Thread(target=_watchdog, daemon=True)
+_watchdog_thread = threading.Thread(target=_watchdog, daemon=True, name="watchdog")
 _watchdog_thread.start()
+
+@app.before_request
+def _lazy_start():
+    _ensure_refresh_thread()
 
 @app.route("/api/chain")
 def api_chain():
@@ -539,7 +554,11 @@ def debug():
         result["cache_ready"] = _cache["ready"]
         result["cache_market_status"] = _cache.get("market_status")
         result["last_error"] = _last_error
-        result["thread_alive"] = _refresh_thread.is_alive()
+        result["refresh_log"] = _refresh_log
+        result["thread_alive"] = _refresh_thread.is_alive() if _refresh_thread else False
+        result["thread_name"] = _refresh_thread.name if _refresh_thread else None
+        result["pid"] = os.getpid()
+        result["is_market_open"] = is_market_open()
     except Exception as e:
         import traceback
         result["exception"] = traceback.format_exc()
