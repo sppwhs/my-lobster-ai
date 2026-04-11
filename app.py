@@ -327,6 +327,7 @@ _cache = {"spot":0.0,"fut":0.0,"hv":25.0,"update_time":"--","contracts":[], "rea
 _lock  = threading.Lock()
 _hv_last_fetch = 0.0
 _hv_value = 25.0
+_last_error = ""
 
 def build_chain_data(contract, spot, hv, compute_atm=False):
     T = time_to_expiry_years(contract["expiry"])
@@ -368,7 +369,7 @@ def build_chain_data(contract, spot, hv, compute_atm=False):
     return result
 
 def refresh_loop():
-    global _hv_last_fetch, _hv_value
+    global _hv_last_fetch, _hv_value, _last_error
     while True:
         interval = 6
         try:
@@ -418,7 +419,9 @@ def refresh_loop():
                     "market_status": market_status,
                 })
         except Exception as e:
-            print(f"[refresh error] {e}")
+            import traceback
+            _last_error = traceback.format_exc()
+            print(f"[refresh error] {_last_error}")
             interval = 30
         time.sleep(interval)
 
@@ -479,6 +482,7 @@ def debug():
             "cache_market_status": _cache.get("market_status"),
             "yahoo1": yahoo1,
             "twse": twse,
+            "last_error": _last_error,
         })
 
 HTML = r"""<!DOCTYPE html>
