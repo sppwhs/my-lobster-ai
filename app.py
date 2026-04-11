@@ -328,6 +328,7 @@ _lock  = threading.Lock()
 _hv_last_fetch = 0.0
 _hv_value = 25.0
 _last_error = ""
+_refresh_log = []
 
 def build_chain_data(contract, spot, hv, compute_atm=False):
     T = time_to_expiry_years(contract["expiry"])
@@ -369,37 +370,46 @@ def build_chain_data(contract, spot, hv, compute_atm=False):
     return result
 
 def refresh_loop():
-    global _hv_last_fetch, _hv_value, _last_error
+    global _hv_last_fetch, _hv_value, _last_error, _refresh_log
     while True:
         interval = 6
+        log = []
         try:
+            log.append("step1:fetch_underlying")
             spot, fut = fetch_underlying()
+            log.append(f"step1_done:spot={spot}")
             market_status = "即時"
 
             if spot <= 0:
-                # 市場收盤：改用 Yahoo Finance 取台股收盤價
+                log.append("step2:fetch_yahoo")
                 spot = fetch_spot_yahoo()
-                fut = spot  # 收盤時期貨用現貨近似
+                fut = spot
                 market_status = "收盤"
-                interval = 300  # 收盤時每 5 分鐘更新一次
+                interval = 300
+                log.append(f"step2_done:spot={spot}")
                 if spot <= 0:
+                    log.append("step2_fail:spot=0")
+                    _refresh_log = log
                     time.sleep(30); continue
 
-            # HV: 優先本機 CSV，否則用 ATM IV 估算，每小時更新一次
+            log.append("step3:hv")
             if time.time() - _hv_last_fetch > 3600:
-                _hv_value = fetch_hv_local() or 0.0   # 0 = 待 ATM 計算
+                _hv_value = fetch_hv_local() or 0.0
                 _hv_last_fetch = time.time()
-            hv = _hv_value or 25.0  # 收盤時無 ATM-IV，預設 25%
+            hv = _hv_value or 25.0
+            log.append(f"step3_done:hv={hv}")
 
+            log.append("step4:get_contracts")
             contracts_meta = get_active_contracts()
+            log.append(f"step4_done:n={len(contracts_meta)}")
+
             results = []
             for ci, c in enumerate(contracts_meta):
+                log.append(f"step5_{ci}:build_chain:{c['label']}")
                 if market_status == "收盤":
-                    # 收盤時：純理論 Greeks，不呼叫 MIS API
                     chain = build_chain_data_closed(c, spot, hv)
                 else:
                     chain = build_chain_data(c, spot, hv, compute_atm=(ci==0 and hv<=0))
-                    # 若第一個合約算出 ATM IV，用作全局 HV 估算
                     if ci == 0 and hv <= 0:
                         atm_iv = compute_atm_iv(spot, c, fetch_option_chain(c, spot, wings=3))
                         if atm_iv:
@@ -410,6 +420,9 @@ def refresh_loop():
                     "days_left": (c["expiry"] - date.today()).days,
                     "chain": chain,
                 })
+                log.append(f"step5_{ci}_done:rows={len(chain)}")
+
+            log.append("step6:update_cache")
             hv_source = "HV" if fetch_hv_local() else "ATM-IV"
             with _lock:
                 _cache.update({
@@ -418,9 +431,13 @@ def refresh_loop():
                     "contracts":results,"ready":True,
                     "market_status": market_status,
                 })
+            log.append("step6_done:ready=True")
+            _refresh_log = log
         except Exception as e:
             import traceback
             _last_error = traceback.format_exc()
+            log.append(f"EXCEPTION:{e}")
+            _refresh_log = log
             print(f"[refresh error] {_last_error}")
             interval = 30
         time.sleep(interval)
@@ -483,6 +500,7 @@ def debug():
             "yahoo1": yahoo1,
             "twse": twse,
             "last_error": _last_error,
+            "refresh_log": _refresh_log,
         })
 
 HTML = r"""<!DOCTYPE html>
