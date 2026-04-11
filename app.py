@@ -220,6 +220,45 @@ def fetch_hv_local() -> Optional[float]:
     except:
         return None
 
+def fetch_spot_yahoo() -> float:
+    """市場收盤時從 Yahoo Finance 取台股加權指數最新收盤價"""
+    try:
+        r = requests.get(
+            "https://query1.finance.yahoo.com/v8/finance/chart/%5ETWII",
+            params={"interval": "1d", "range": "5d"},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10
+        )
+        result = r.json()["chart"]["result"][0]
+        closes = [c for c in result["indicators"]["quote"][0].get("close", []) if c is not None]
+        return round(float(closes[-1]), 2) if closes else 0.0
+    except:
+        return 0.0
+
+def build_chain_data_closed(contract: dict, spot: float, hv: float) -> list:
+    """市場收盤時的理論選擇權鏈（不呼叫 MIS API，純 BS 計算）"""
+    T = time_to_expiry_years(contract["expiry"])
+    step = contract["strike_step"]
+    atm_r = round(spot / step) * step
+    sigma = max(hv, 10.0) / 100
+    result = []
+    for i in range(-18, 19):
+        k = atm_r + i * step
+        cg = bs_greeks(spot, k, T, RISK_FREE_RATE, sigma, True)
+        pg = bs_greeks(spot, k, T, RISK_FREE_RATE, sigma, False)
+        result.append({
+            "strike": k,
+            "c_bid":0,"c_ask":0,"c_last":0,"c_ref":0,"c_diff":0,"c_iv":None,
+            "c_delta":round(cg.get("delta",0),4),"c_gamma":round(cg.get("gamma",0),6),
+            "c_theta":round(cg.get("theta",0),2),"c_vega":round(cg.get("vega",0),2),
+            "c_rho":round(cg.get("rho",0),4),
+            "p_bid":0,"p_ask":0,"p_last":0,"p_ref":0,"p_diff":0,"p_iv":None,
+            "p_delta":round(pg.get("delta",0),4),"p_gamma":round(pg.get("gamma",0),6),
+            "p_theta":round(pg.get("theta",0),2),"p_vega":round(pg.get("vega",0),2),
+            "p_rho":round(pg.get("rho",0),4),
+        })
+    return result
+
 def compute_atm_iv(spot: float, contract: dict, rows: list) -> Optional[float]:
     """用 ATM 選擇權 IV 的平均值估算整體波動率水準（雲端版 HV 替代）"""
     if not rows or spot <= 0:
@@ -249,7 +288,7 @@ def compute_atm_iv(spot: float, contract: dict, rows: list) -> Optional[float]:
 # ─────────────────────────────────────────────
 # 資料快取與背景刷新
 # ─────────────────────────────────────────────
-_cache = {"spot":0.0,"fut":0.0,"hv":25.0,"update_time":"--","contracts":[], "ready":False}
+_cache = {"spot":0.0,"fut":0.0,"hv":25.0,"update_time":"--","contracts":[], "ready":False, "market_status":"--"}
 _lock  = threading.Lock()
 _hv_last_fetch = 0.0
 _hv_value = 25.0
@@ -296,24 +335,39 @@ def build_chain_data(contract, spot, hv, compute_atm=False):
 def refresh_loop():
     global _hv_last_fetch, _hv_value
     while True:
+        interval = 6
         try:
             spot, fut = fetch_underlying()
+            market_status = "即時"
+
             if spot <= 0:
-                time.sleep(3); continue
+                # 市場收盤：改用 Yahoo Finance 取台股收盤價
+                spot = fetch_spot_yahoo()
+                fut = spot  # 收盤時期貨用現貨近似
+                market_status = "收盤"
+                interval = 300  # 收盤時每 5 分鐘更新一次
+                if spot <= 0:
+                    time.sleep(30); continue
+
             # HV: 優先本機 CSV，否則用 ATM IV 估算，每小時更新一次
             if time.time() - _hv_last_fetch > 3600:
                 _hv_value = fetch_hv_local() or 0.0   # 0 = 待 ATM 計算
                 _hv_last_fetch = time.time()
-            hv = _hv_value
+            hv = _hv_value or 25.0  # 收盤時無 ATM-IV，預設 25%
+
             contracts_meta = get_active_contracts()
             results = []
             for ci, c in enumerate(contracts_meta):
-                chain = build_chain_data(c, spot, hv, compute_atm=(ci==0 and hv<=0))
-                # 若第一個合約算出 ATM IV，用作全局 HV 估算
-                if ci == 0 and hv <= 0:
-                    atm_iv = compute_atm_iv(spot, c, fetch_option_chain(c, spot, wings=3))
-                    if atm_iv:
-                        hv = atm_iv
+                if market_status == "收盤":
+                    # 收盤時：純理論 Greeks，不呼叫 MIS API
+                    chain = build_chain_data_closed(c, spot, hv)
+                else:
+                    chain = build_chain_data(c, spot, hv, compute_atm=(ci==0 and hv<=0))
+                    # 若第一個合約算出 ATM IV，用作全局 HV 估算
+                    if ci == 0 and hv <= 0:
+                        atm_iv = compute_atm_iv(spot, c, fetch_option_chain(c, spot, wings=3))
+                        if atm_iv:
+                            hv = atm_iv
                 results.append({
                     "label": c["label"],
                     "expiry_str": c["expiry"].strftime("%Y/%m/%d"),
@@ -326,10 +380,12 @@ def refresh_loop():
                     "spot":spot,"fut":fut,"hv":hv,"hv_source":hv_source,
                     "update_time":datetime.now().strftime("%H:%M:%S"),
                     "contracts":results,"ready":True,
+                    "market_status": market_status,
                 })
         except Exception as e:
             print(f"[refresh error] {e}")
-        time.sleep(6)
+            interval = 30
+        time.sleep(interval)
 
 # ─────────────────────────────────────────────
 # Flask App
@@ -350,6 +406,7 @@ def api_chain():
             "spot":_cache["spot"], "fut":_cache["fut"],
             "hv":_cache["hv"], "update_time":_cache["update_time"],
             "contracts":_cache["contracts"],
+            "market_status": _cache.get("market_status", "即時"),
         })
 
 @app.route("/health")
@@ -379,7 +436,15 @@ body{background:var(--bg);color:var(--tx);font-family:'Courier New',monospace;fo
 .tv{color:var(--dim);font-size:11px;margin-left:auto}
 .dot-live{display:inline-block;width:7px;height:7px;border-radius:50%;
           background:var(--green);animation:pulse 2s infinite;margin-right:4px}
+.dot-closed{display:inline-block;width:7px;height:7px;border-radius:50%;
+            background:var(--dim);margin-right:4px}
+.dot-night{display:inline-block;width:7px;height:7px;border-radius:50%;
+           background:var(--yel);animation:pulse 2s infinite;margin-right:4px}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.status-badge{font-size:10px;padding:1px 6px;border-radius:8px;margin-left:4px}
+.status-live{background:#1a3a2a;color:var(--green)}
+.status-closed{background:#1e1e1e;color:var(--dim)}
+.status-night{background:#2a2a10;color:var(--yel)}
 
 /* Tabs */
 #tabs{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
@@ -445,7 +510,7 @@ tr.atm td.sk{color:#fff176;background:#252510}
     <div><span class="pl">現貨 </span><span class="pv sv" id="sv">--</span></div>
     <div><span class="pl">期貨 </span><span class="pv fv" id="fv">--</span></div>
     <div><span class="pl" id="hv-label">HV </span><span class="pv hv" id="hv">--%</span></div>
-    <div class="tv"><span class="dot-live"></span><span id="tv">--:--:--</span></div>
+    <div class="tv"><span id="dot" class="dot-live"></span><span id="tv">--:--:--</span><span id="msbadge" class="status-badge"></span></div>
   </div>
   <div id="tabs"></div>
   <div style="display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap">
@@ -480,7 +545,7 @@ tr.atm td.sk{color:#fff176;background:#252510}
 
 <script>
 let curC=0, curV='g', allD=null, prog=0;
-const ldMsgs=['連接台灣期貨交易所...','拉取期貨現貨報價...','計算選擇權報價鏈...','計算 Greeks & IV...','處理完成！'];
+const ldMsgs=['連接台灣期貨交易所...','拉取現貨報價...','計算選擇權報價鏈...','計算 Greeks & IV...','處理完成！'];
 const ldTimer=setInterval(()=>{
   prog=Math.min(prog+2,95);
   const bar=document.getElementById('ldbar');
@@ -608,6 +673,23 @@ async function fetchData(){
     document.getElementById('hv').textContent=d.hv?d.hv.toFixed(2)+'%':'--%';
     if(d.hv_source)document.getElementById('hv-label').textContent=d.hv_source+' ';
     document.getElementById('tv').textContent=d.update_time||'--';
+    // Market status dot & badge
+    const ms=d.market_status||'即時';
+    const dot=document.getElementById('dot');
+    const badge=document.getElementById('msbadge');
+    if(ms==='收盤'){
+      dot.className='dot-closed';
+      badge.className='status-badge status-closed';
+      badge.textContent='收盤';
+    } else if(ms==='夜盤'){
+      dot.className='dot-night';
+      badge.className='status-badge status-night';
+      badge.textContent='夜盤';
+    } else {
+      dot.className='dot-live';
+      badge.className='status-badge status-live';
+      badge.textContent='即時';
+    }
     // Tabs
     document.getElementById('tabs').innerHTML=d.contracts.map((c,i)=>
       `<button class="tb ${i===curC?'active':''}" onclick="setC(${i})">${c.label}</button>`
