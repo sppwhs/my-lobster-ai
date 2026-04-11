@@ -470,38 +470,38 @@ def health():
 
 @app.route("/debug")
 def debug():
-    """診斷端點：回傳快取狀態與備援測試"""
-    yahoo1, yahoo2, twse = 0.0, 0.0, 0.0
+    """診斷端點：直接執行一次完整流程並回傳結果"""
+    result = {"steps": []}
+    def log(msg): result["steps"].append(msg)
+
     try:
-        r = requests.get("https://query1.finance.yahoo.com/v8/finance/chart/%5ETWII",
-            params={"interval":"1d","range":"5d"},
-            headers={"User-Agent":"Mozilla/5.0"},timeout=8)
-        if r.status_code == 200:
-            closes = [c for c in r.json()["chart"]["result"][0]["indicators"]["quote"][0].get("close",[]) if c]
-            yahoo1 = round(float(closes[-1]),2) if closes else 0.0
+        log("1:fetch_underlying")
+        spot, fut = fetch_underlying()
+        log(f"1_done: spot={spot}")
+
+        if spot <= 0:
+            log("2:fetch_spot_yahoo")
+            spot = fetch_spot_yahoo()
+            log(f"2_done: spot={spot}")
+
+        log(f"3:get_contracts")
+        contracts = get_active_contracts()
+        log(f"3_done: n={len(contracts)} labels={[c['label'] for c in contracts]}")
+
+        if spot > 0 and contracts:
+            log("4:build_chain_closed (first contract)")
+            chain = build_chain_data_closed(contracts[0], spot, 25.0)
+            log(f"4_done: rows={len(chain)}")
+
+        result["cache_ready"] = _cache["ready"]
+        result["cache_market_status"] = _cache.get("market_status")
+        result["last_error"] = _last_error
+        result["thread_alive"] = _refresh_thread.is_alive()
     except Exception as e:
-        yahoo1 = f"err:{e}"
-    try:
-        r = requests.get("https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX",
-            params={"response":"json","date":datetime.now().strftime("%Y%m%d"),"type":"IND"},
-            headers={"User-Agent":"Mozilla/5.0","Referer":"https://www.twse.com.tw"},timeout=8)
-        data = r.json()
-        for row in data.get("data",[]):
-            if row and "發行量加權股價指數" in str(row):
-                twse = str(row[-2] if len(row)>2 else row[-1]).replace(",","")
-                break
-    except Exception as e:
-        twse = f"err:{e}"
-    with _lock:
-        return jsonify({
-            "cache_ready": _cache["ready"],
-            "cache_spot": _cache["spot"],
-            "cache_market_status": _cache.get("market_status"),
-            "yahoo1": yahoo1,
-            "twse": twse,
-            "last_error": _last_error,
-            "refresh_log": _refresh_log,
-        })
+        import traceback
+        result["exception"] = traceback.format_exc()
+
+    return jsonify(result)
 
 HTML = r"""<!DOCTYPE html>
 <html lang="zh-TW">
