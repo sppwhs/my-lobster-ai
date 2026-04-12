@@ -323,9 +323,10 @@ def fetch_settlement_prices_from_csv() -> bool:
     """
     服務啟動時，從 TAIFEX CSV 取最近交易日的選擇權收盤價，
     填入 _last_live_prices 快取，讓收盤期間也能看到成交價。
+    同時取 MTX 近月日盤收盤價與最後交易日日期，存入全域變數。
     回傳 True=成功，False=失敗
     """
-    global _last_live_prices
+    global _last_live_prices, _last_trading_date_str, _mtx_settlement_close
     # 找最近交易日（往前最多找 7 天）
     last_trading = None
     for delta in range(1, 8):
@@ -387,7 +388,38 @@ def fetch_settlement_prices_from_csv() -> bool:
                     if label not in _last_live_prices:
                         _last_live_prices[label] = {}
                     _last_live_prices[label].update(prices)
+            _last_trading_date_str = last_trading.strftime("%m/%d")
             print(f"[settlement] loaded {last_trading} prices for {list(new_cache.keys())}")
+            # 順便抓 MTX 近月日盤收盤價
+            try:
+                r2 = requests.get(
+                    "https://www.taifex.com.tw/cht/3/futDataDown",
+                    params={"down_type":"1","queryStartDate":date_str,
+                            "queryEndDate":date_str,"commodity_id":"MTX"},
+                    headers={"User-Agent":"Mozilla/5.0",
+                             "Referer":"https://www.taifex.com.tw/cht/3/futDailyMarketReport"},
+                    timeout=15, verify=False
+                )
+                if r2.status_code == 200 and len(r2.content) > 200:
+                    lines2 = r2.content.decode("ms950", errors="replace").strip().split("\n")
+                    best_vol2, best_close2 = 0, 0.0
+                    for line2 in lines2[1:]:
+                        cols2 = [c.strip() for c in line2.split(",")]
+                        if len(cols2) < 18: continue
+                        if cols2[17].strip() != "一般": continue
+                        try:
+                            vol2   = int(cols2[9].replace(",","") or "0")
+                            close2 = float(cols2[6].replace(",","") or "0")
+                            if vol2 > best_vol2 and vol2 > 0 and close2 > 0:
+                                best_vol2   = vol2
+                                best_close2 = close2
+                        except (ValueError, IndexError):
+                            continue
+                    if best_close2 > 0:
+                        _mtx_settlement_close = best_close2
+                        print(f"[settlement] MTX close={best_close2} on {date_str}")
+            except Exception as e2:
+                print(f"[settlement] MTX error: {e2}")
             return True
     except Exception as e:
         print(f"[settlement] error: {e}")
@@ -500,6 +532,9 @@ _last_error = ""
 _refresh_log = []
 # 最後一次開盤時各合約的成交價快取 {contract_label: {strike: {"c_last":x, "p_last":x}}}
 _last_live_prices: dict = {}
+# 最後一個交易日資訊（由 fetch_settlement_prices_from_csv 填入）
+_last_trading_date_str = "--"   # e.g. "04/10"
+_mtx_settlement_close  = 0.0   # MTX 近月合約日盤收盤價
 
 def build_chain_data(contract, spot, hv, compute_atm=False):
     global _last_live_prices
@@ -579,8 +614,9 @@ def refresh_loop():
                     if spot <= 0:
                         log.append("step2:fetch_yahoo")
                         spot = fetch_spot_yahoo()
-                        fut = spot
                         log.append(f"step2_done:spot={spot}")
+                    # fut 用最後交易日 MTX 收盤價，抓不到才退回 spot
+                    fut = _mtx_settlement_close if _mtx_settlement_close > 0 else spot
                     market_status = "收盤"
                     interval = 300
                     if spot <= 0:
@@ -628,7 +664,7 @@ def refresh_loop():
                     _cache.update({
                         "spot": spot, "fut": fut, "hv": hv, "hv_source": hv_source,
                         "update_time": now_tw.strftime("%H:%M:%S"),
-                        "data_date":   now_tw.strftime("%m/%d"),
+                        "data_date":   now_tw.strftime("%m/%d") if market_status == "即時" else _last_trading_date_str,
                         "contracts": results, "ready": True,
                         "market_status": market_status,
                     })
