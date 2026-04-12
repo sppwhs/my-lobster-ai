@@ -283,24 +283,74 @@ def fetch_spot_yahoo() -> float:
         pass
     return 0.0
 
+def fetch_ref_prices(contract: dict, strikes: list) -> dict:
+    """
+    收盤時從 TAIFEX API 取各履約價的參考價（CRefPrice）與最後成交（CLastPrice）。
+    回傳 {symbol_id: {"last": float, "ref": float}} 字典。
+    失敗時回傳空 dict，不影響主流程。
+    """
+    call_syms = [f'{contract["prefix"]}{k}{contract["call_suffix"]}' for k in strikes]
+    put_syms  = [f'{contract["prefix"]}{k}{contract["put_suffix"]}'  for k in strikes]
+    result = {}
+    for batch in [call_syms[:40] + put_syms[:40], call_syms[40:] + put_syms[40:]]:
+        if not batch:
+            continue
+        try:
+            r = requests.post(BASE + "getQuoteDetail",
+                json={"SymbolID": batch},
+                headers=HDRS, timeout=10, verify=False)
+            if r.status_code != 200:
+                continue
+            for q in r.json().get("RtData", {}).get("QuoteList", []):
+                sid = q.get("SymbolID")
+                if not sid:
+                    continue
+                def _f(key):
+                    try: return float(q.get(key) or 0)
+                    except: return 0.0
+                result[sid] = {"last": _f("CLastPrice"), "ref": _f("CRefPrice")}
+        except:
+            pass
+    return result
+
 def build_chain_data_closed(contract: dict, spot: float, hv: float) -> list:
-    """市場收盤時的理論選擇權鏈（不呼叫 MIS API，純 BS 計算）"""
+    """
+    市場收盤時的選擇權鏈：
+    - Greeks 用 BS 純計算
+    - 成交價 / 參考價：嘗試從 TAIFEX API 取 CLastPrice / CRefPrice
+    """
     T = time_to_expiry_years(contract["expiry"])
     step = contract["strike_step"]
     atm_r = round(spot / step) * step
     sigma = max(hv, 10.0) / 100
+
+    strikes = [atm_r + i * step for i in range(-18, 19)]
+    call_syms = [f'{contract["prefix"]}{k}{contract["call_suffix"]}' for k in strikes]
+    put_syms  = [f'{contract["prefix"]}{k}{contract["put_suffix"]}'  for k in strikes]
+
+    # 嘗試取參考價（失敗不影響顯示，降級為 0）
+    ref_data = fetch_ref_prices(contract, strikes)
+
     result = []
-    for i in range(-18, 19):
-        k = atm_r + i * step
+    for k, cs, ps in zip(strikes, call_syms, put_syms):
         cg = bs_greeks(spot, k, T, RISK_FREE_RATE, sigma, True)
         pg = bs_greeks(spot, k, T, RISK_FREE_RATE, sigma, False)
+        cd = ref_data.get(cs, {})
+        pd = ref_data.get(ps, {})
+        c_last = int(cd.get("last", 0))
+        c_ref  = int(cd.get("ref",  0))
+        p_last = int(pd.get("last", 0))
+        p_ref  = int(pd.get("ref",  0))
+        # 若 CLastPrice=0 但 CRefPrice 有值，用參考價作為成交顯示
+        c_show = c_last or c_ref
+        p_show = p_last or p_ref
         result.append({
             "strike": k,
-            "c_bid":0,"c_ask":0,"c_last":0,"c_ref":0,"c_diff":0,"c_iv":None,
+            "c_bid":0,"c_ask":0,"c_last":c_show,"c_ref":c_ref,"c_diff":0,"c_iv":None,
             "c_delta":round(cg.get("delta",0),4),"c_gamma":round(cg.get("gamma",0),6),
             "c_theta":round(cg.get("theta",0),2),"c_vega":round(cg.get("vega",0),2),
             "c_rho":round(cg.get("rho",0),4),
-            "p_bid":0,"p_ask":0,"p_last":0,"p_ref":0,"p_diff":0,"p_iv":None,
+            "p_bid":0,"p_ask":0,"p_last":p_show,"p_ref":p_ref,"p_diff":0,"p_iv":None,
             "p_delta":round(pg.get("delta",0),4),"p_gamma":round(pg.get("gamma",0),6),
             "p_theta":round(pg.get("theta",0),2),"p_vega":round(pg.get("vega",0),2),
             "p_rho":round(pg.get("rho",0),4),
