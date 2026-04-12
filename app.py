@@ -327,75 +327,52 @@ def fetch_settlement_prices_from_csv() -> bool:
     回傳 True=成功，False=失敗
     """
     global _last_live_prices, _last_trading_date_str, _mtx_settlement_close
-    # 找最近兩個交易日（last=最後交易日, prev=前一個交易日）
-    trading_days = []
-    for delta in range(1, 15):
+    # 找最近交易日（往前最多找 7 天）
+    last_trading = None
+    for delta in range(1, 8):
         d = date.today() - timedelta(days=delta)
         if d.weekday() < 5:
-            trading_days.append(d)
-        if len(trading_days) == 2:
+            last_trading = d
             break
-    if len(trading_days) < 1:
+    if not last_trading:
         return False
-    last_trading = trading_days[0]
-    prev_trading = trading_days[1] if len(trading_days) > 1 else None
-
-    def _fetch_opt_csv(day: date) -> dict:
-        """抓單日選擇權 CSV，回傳 {csv_code: {strike: {c:price, p:price}}}"""
-        ds = day.strftime("%Y/%m/%d")
-        try:
-            r = requests.get(
-                "https://www.taifex.com.tw/cht/3/optDataDown",
-                params={"down_type":"1","queryStartDate":ds,
-                        "queryEndDate":ds,"commodity_id":"TXO"},
-                headers={"User-Agent":"Mozilla/5.0",
-                         "Referer":"https://www.taifex.com.tw/cht/3/optDailyMarketReport"},
-                timeout=20, verify=False
-            )
-            if r.status_code != 200 or len(r.content) < 500:
-                return {}
-            result: dict = {}
-            for line in r.content.decode("ms950", errors="replace").strip().split("\n")[1:]:
-                cols = [c.strip() for c in line.split(",")]
-                if len(cols) < 18: continue
-                if cols[17].strip() != "一般": continue
-                csv_code = cols[2].strip()
-                try:
-                    k = int(float(cols[3].replace(".0000","").strip()))
-                    v = float(cols[8].strip()) if cols[8].strip() not in ("-","") else 0.0
-                except (ValueError, TypeError):
-                    continue
-                side = cols[4].strip()
-                if csv_code not in result:
-                    result[csv_code] = {}
-                if k not in result[csv_code]:
-                    result[csv_code][k] = {"c":0,"p":0}
-                if "買" in side:
-                    result[csv_code][k]["c"] = int(v)
-                else:
-                    result[csv_code][k]["p"] = int(v)
-            return result
-        except Exception as e:
-            print(f"[settlement] csv fetch error {day}: {e}")
-            return {}
-
-    raw_last = _fetch_opt_csv(last_trading)
-    raw_prev = _fetch_opt_csv(prev_trading) if prev_trading else {}
 
     date_str = last_trading.strftime("%Y/%m/%d")
     try:
-        # 合併成 {csv_code: {strike: {c_last, c_ref, p_last, p_ref}}}
+        r = requests.get(
+            "https://www.taifex.com.tw/cht/3/optDataDown",
+            params={"down_type":"1","queryStartDate":date_str,
+                    "queryEndDate":date_str,"commodity_id":"TXO"},
+            headers={"User-Agent":"Mozilla/5.0",
+                     "Referer":"https://www.taifex.com.tw/cht/3/optDailyMarketReport"},
+            timeout=20, verify=False
+        )
+        if r.status_code != 200 or len(r.content) < 500:
+            return False
+        # 解析：col[8]=收盤價, col[9]=漲跌點數 → c_ref = c_last - c_diff
         raw: dict = {}
-        for csv_code, strikes in raw_last.items():
-            raw[csv_code] = {}
-            for k, prices in strikes.items():
-                prev_prices = raw_prev.get(csv_code, {}).get(k, {"c":0,"p":0})
-                raw[csv_code][k] = {
-                    "c_last": prices["c"],
-                    "c_ref":  prev_prices["c"],
-                    "p_last": prices["p"],
-                    "p_ref":  prev_prices["p"],
-                }
+        for line in r.content.decode("ms950", errors="replace").strip().split("\n")[1:]:
+            cols = [c.strip() for c in line.split(",")]
+            if len(cols) < 18: continue
+            if cols[17].strip() != "一般": continue
+            csv_code = cols[2].strip()
+            try:
+                k     = int(float(cols[3].replace(".0000","").strip()))
+                close = float(cols[8]) if cols[8] not in ("-","") else 0.0
+                diff  = float(cols[9]) if cols[9] not in ("-","") else 0.0
+            except (ValueError, TypeError):
+                continue
+            side = cols[4].strip()
+            if csv_code not in raw:
+                raw[csv_code] = {}
+            if k not in raw[csv_code]:
+                raw[csv_code][k] = {"c_last":0,"c_ref":0,"p_last":0,"p_ref":0}
+            if "買" in side:
+                raw[csv_code][k]["c_last"] = int(close)
+                raw[csv_code][k]["c_ref"]  = int(close - diff)
+            else:
+                raw[csv_code][k]["p_last"] = int(close)
+                raw[csv_code][k]["p_ref"]  = int(close - diff)
         if not raw:
             return False
         # CSV 有資料 → 記錄最後交易日日期（不管 contracts 是否對應到）
