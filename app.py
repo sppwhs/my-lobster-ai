@@ -766,7 +766,7 @@ MANIFEST_JSON = """{
   "background_color": "#0d1117",
   "theme_color": "#0d1117",
   "icons": [
-    {"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}
+    {"src": "/icon.svg?v=3", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}
   ]
 }"""
 
@@ -909,9 +909,9 @@ tr.ic td.cs{background:#1a1008}
 tr.ip td.ps{background:#0d1a14}
 td.sk{text-align:center;font-weight:bold;color:var(--yel);background:#11130d}
 tr.atm td.sk{color:#fff176;background:#252510}
-.cl{color:var(--red);font-weight:bold}.pl{color:var(--cy);font-weight:bold}
+.cu{color:var(--red);font-weight:bold}.cd{color:var(--green);font-weight:bold}.cn{font-weight:bold}
 .cb{color:#ffaaaa}.ca{color:#ffaaaa}.pb{color:#aaddff}.pa{color:#aaddff}
-.du{color:var(--red)}.dd{color:var(--cy)}
+.du{color:var(--red)}.dd{color:var(--green)}
 .iv{color:var(--yel)}.hvc{color:var(--dim)}
 .dhi{color:var(--red);font-weight:bold}.dmd{color:var(--or)}.dlo{color:var(--tx)}
 .phi{color:#58d68d;font-weight:bold}.pmd{color:#66bb6a}.plo{color:var(--tx)}
@@ -1008,7 +1008,11 @@ function fDiff(v){
   return`<span class="${v>0?'du':'dd'}">${v>0?'▲':'▼'}${Math.abs(v)}</span>`;
 }
 function fIV(v){return v?`<span class="iv">${v.toFixed(2)}</span>`:'<span class="nd">--</span>';}
-function fp(v,c){return v?`<span class="${c}">${v}</span>`:'<span class="nd">--</span>';}
+function fp(v,ref){
+  if(!v)return'<span class="nd">--</span>';
+  const cls=ref>0?(v>ref?'cu':v<ref?'cd':'cn'):'cn';
+  return`<span class="${cls}">${v}</span>`;
+}
 
 function gHead(){
   return`<tr>
@@ -1036,8 +1040,8 @@ function mHead(){
     <th class="ph">成交</th><th class="ph">賣出</th><th class="ph">買進</th>
   </tr>`;
 }
-function gRow(r,spot){
-  const atm=Math.abs(r.strike-spot)<60,ic=r.strike<spot,ip=r.strike>spot;
+function gRow(r,spot,atmStrike){
+  const atm=r.strike===atmStrike,ic=r.strike<spot,ip=r.strike>spot;
   const cls=atm?'atm':ic?'ic':ip?'ip':'';
   return`<tr class="${cls}">
     <td class="cs">${fDelta(r.c_delta,true)}</td>
@@ -1045,9 +1049,9 @@ function gRow(r,spot){
     <td class="cs"><span class="tv2">${r.c_theta?r.c_theta.toFixed(1):'--'}</span></td>
     <td class="cs"><span class="vv">${r.c_vega?r.c_vega.toFixed(1):'--'}</span></td>
     <td class="cs"><span class="rv">${r.c_rho?r.c_rho.toFixed(3):'--'}</span></td>
-    <td class="cs">${fp(r.c_last,'cl')}</td>
+    <td class="cs">${fp(r.c_last,r.c_ref)}</td>
     <td class="sk">${r.strike}</td>
-    <td class="ps">${fp(r.p_last,'pl')}</td>
+    <td class="ps">${fp(r.p_last,r.p_ref)}</td>
     <td class="ps"><span class="rv">${r.p_rho?r.p_rho.toFixed(3):'--'}</span></td>
     <td class="ps"><span class="vv">${r.p_vega?r.p_vega.toFixed(1):'--'}</span></td>
     <td class="ps"><span class="tv2">${r.p_theta?r.p_theta.toFixed(1):'--'}</span></td>
@@ -1055,14 +1059,14 @@ function gRow(r,spot){
     <td class="ps">${fDelta(r.p_delta,false)}</td>
   </tr>`;
 }
-function mRow(r,spot,hv){
-  const atm=Math.abs(r.strike-spot)<60,ic=r.strike<spot,ip=r.strike>spot;
+function mRow(r,spot,hv,atmStrike){
+  const atm=r.strike===atmStrike,ic=r.strike<spot,ip=r.strike>spot;
   const cls=atm?'atm':ic?'ic':ip?'ip':'';
   const hvs=`<span class="hvc">${hv?hv.toFixed(2):'--'}</span>`;
   return`<tr class="${cls}">
     <td class="cs"><span class="cb">${r.c_bid||'--'}</span></td>
     <td class="cs"><span class="ca">${r.c_ask||'--'}</span></td>
-    <td class="cs">${fp(r.c_last,'cl')}</td>
+    <td class="cs">${fp(r.c_last,r.c_ref)}</td>
     <td class="cs">${fDiff(r.c_diff)}</td>
     <td class="cs">${hvs}</td>
     <td class="cs">${fIV(r.c_iv)}</td>
@@ -1070,7 +1074,7 @@ function mRow(r,spot,hv){
     <td class="ps">${fIV(r.p_iv)}</td>
     <td class="ps">${hvs}</td>
     <td class="ps">${fDiff(r.p_diff)}</td>
-    <td class="ps">${fp(r.p_last,'pl')}</td>
+    <td class="ps">${fp(r.p_last,r.p_ref)}</td>
     <td class="ps"><span class="pa">${r.p_ask||'--'}</span></td>
     <td class="ps"><span class="pb">${r.p_bid||'--'}</span></td>
   </tr>`;
@@ -1081,11 +1085,14 @@ function render(){
   const spot=allD.spot, hv=allD.hv;
   const con=allD.contracts[curC];
   if(!con)return;
+  // 找距離 spot 最近的單一履約價作為價平
+  let atmStrike=null,minD=Infinity;
+  (con.chain||[]).forEach(r=>{const d=Math.abs(r.strike-spot);if(d<minD){minD=d;atmStrike=r.strike;}});
   document.getElementById('db').textContent=`距到期 ${con.days_left} 天`;
   document.getElementById('ch').innerHTML=curV==='g'?gHead():mHead();
   let html='';
   (con.chain||[]).forEach(r=>{
-    html+=curV==='g'?gRow(r,spot):mRow(r,spot,hv);
+    html+=curV==='g'?gRow(r,spot,atmStrike):mRow(r,spot,hv,atmStrike);
   });
   document.getElementById('cb').innerHTML=html;
   const atm=document.querySelector('.atm');
