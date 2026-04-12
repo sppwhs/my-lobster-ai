@@ -665,6 +665,61 @@ _watchdog_thread.start()
 def _lazy_start():
     _ensure_refresh_thread()
 
+ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">
+  <rect width="192" height="192" rx="36" fill="#0d1117"/>
+  <!-- body -->
+  <ellipse cx="96" cy="108" rx="38" ry="28" fill="#e05a2b"/>
+  <!-- tail segments -->
+  <ellipse cx="96" cy="138" rx="28" ry="10" fill="#c94e22"/>
+  <ellipse cx="96" cy="152" rx="20" ry="8"  fill="#b54420"/>
+  <ellipse cx="96" cy="164" rx="12" ry="6"  fill="#e05a2b"/>
+  <!-- head -->
+  <ellipse cx="96" cy="82" rx="26" ry="20" fill="#e05a2b"/>
+  <!-- eyes -->
+  <circle cx="84" cy="74" r="5" fill="#111"/>
+  <circle cx="108" cy="74" r="5" fill="#111"/>
+  <circle cx="85" cy="73" r="2" fill="#fff"/>
+  <circle cx="109" cy="73" r="2" fill="#fff"/>
+  <!-- antennae -->
+  <line x1="84" y1="70" x2="60" y2="44" stroke="#e05a2b" stroke-width="3" stroke-linecap="round"/>
+  <line x1="108" y1="70" x2="132" y2="44" stroke="#e05a2b" stroke-width="3" stroke-linecap="round"/>
+  <!-- claws left -->
+  <ellipse cx="54" cy="96" rx="14" ry="9" fill="#c94e22" transform="rotate(-30 54 96)"/>
+  <ellipse cx="44" cy="88" rx="9" ry="6"  fill="#e05a2b" transform="rotate(-40 44 88)"/>
+  <!-- claws right -->
+  <ellipse cx="138" cy="96" rx="14" ry="9" fill="#c94e22" transform="rotate(30 138 96)"/>
+  <ellipse cx="148" cy="88" rx="9" ry="6"  fill="#e05a2b" transform="rotate(40 148 88)"/>
+  <!-- legs -->
+  <line x1="72"  y1="116" x2="52"  y2="130" stroke="#b54420" stroke-width="3" stroke-linecap="round"/>
+  <line x1="78"  y1="122" x2="58"  y2="140" stroke="#b54420" stroke-width="3" stroke-linecap="round"/>
+  <line x1="120" y1="116" x2="140" y2="130" stroke="#b54420" stroke-width="3" stroke-linecap="round"/>
+  <line x1="114" y1="122" x2="134" y2="140" stroke="#b54420" stroke-width="3" stroke-linecap="round"/>
+</svg>"""
+
+MANIFEST_JSON = """{
+  "name": "龍蝦選擇權",
+  "short_name": "龍蝦選擇權",
+  "description": "台指選擇權即時監控",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d1117",
+  "theme_color": "#0d1117",
+  "icons": [
+    {"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}
+  ]
+}"""
+
+@app.route("/icon.svg")
+def serve_icon():
+    from flask import Response
+    return Response(ICON_SVG, mimetype="image/svg+xml",
+                    headers={"Cache-Control": "public, max-age=86400"})
+
+@app.route("/manifest.json")
+def serve_manifest():
+    from flask import Response
+    return Response(MANIFEST_JSON, mimetype="application/manifest+json")
+
 @app.route("/api/chain")
 def api_chain():
     with _lock:
@@ -728,7 +783,13 @@ HTML = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<title>台指選擇權</title>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="龍蝦選擇權">
+<meta name="theme-color" content="#0d1117">
+<title>龍蝦選擇權</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icon.svg">
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
 <style>
 :root{--bg:#0d1117;--bg2:#161b22;--bd:#30363d;--tx:#e6edf3;--dim:#8b949e;
       --red:#ff6b6b;--green:#58d68d;--yel:#f0e68c;--cy:#4dd0e1;--bl:#79b8ff;--or:#ffa07a;--atm:#1a2744}
