@@ -89,15 +89,14 @@ def time_to_expiry_years(expiry: date) -> float:
     return max(T, 1/(365*24*12))
 
 def is_market_open() -> bool:
-    """判斷台灣期貨市場是否開盤（含夜盤）"""
+    """判斷台灣期貨日盤是否開盤（只看日盤 08:45–13:45，不含夜盤）"""
     from datetime import timezone
     tz_tw = timezone(timedelta(hours=8))
     now = datetime.now(tz_tw)
     wd = now.weekday()  # 0=Mon 6=Sun
+    if wd >= 5: return False                          # 週六/日收盤
     t = now.hour * 60 + now.minute
-    if wd == 6: return False                         # 週日全天收盤
-    if wd == 5: return t < 5 * 60                   # 週六只有凌晨夜盤尾段
-    return (8*60+45 <= t <= 13*60+30) or t >= 15*60 or t < 5*60  # 日盤/夜盤
+    return 8*60+45 <= t <= 13*60+45                  # 日盤 08:45–13:45
 
 # ─────────────────────────────────────────────
 # 到期日計算
@@ -181,10 +180,25 @@ def get_active_contracts():
 BASE = "https://mis.bq888.taifex.com.tw/futures/api/"
 HDRS = {"User-Agent": "Mozilla/5.0"}
 
+def _near_month_futures_sym(prefix="MXF") -> str:
+    """取近月小台期貨 symbol，格式如 MXFD6-F（2026/04）"""
+    today = date.today()
+    yr, mo = today.year, today.month
+    exp = monthly_expiry(yr, mo)
+    if exp < today:          # 近月已到期，取次月
+        mo += 1
+        if mo > 12: yr += 1; mo = 1
+    return f"{prefix}{CALL_MONTH_CODES[mo]}{yr%10}-F"
+
 def fetch_underlying():
+    """
+    抓台指現貨（TXO-Q）與小台近月期貨（MXF）日盤即時報價。
+    回傳 (spot, fut)，失敗時回傳 (0.0, 0.0)。
+    """
+    mxf_sym = _near_month_futures_sym("MXF")
     try:
         r = requests.post(BASE+"getQuoteDetail",
-            json={"SymbolID":["TXO-Q","TXFD6-F"]},
+            json={"SymbolID":["TXO-Q", mxf_sym]},
             headers=HDRS, timeout=8, verify=False, allow_redirects=False)
         if r.status_code != 200:
             return 0.0, 0.0
@@ -193,8 +207,9 @@ def fetch_underlying():
         for q in ql:
             try: val = float(q.get("CLastPrice") or 0)
             except: val = 0.0
-            if q.get("SymbolID") == "TXO-Q": spot = val
-            elif "TXF" in q.get("SymbolID",""): fut = val
+            sid = q.get("SymbolID","")
+            if sid == "TXO-Q":    spot = val
+            elif sid == mxf_sym:  fut  = val
         return spot, fut
     except: return 0.0, 0.0
 
@@ -477,7 +492,7 @@ def compute_atm_iv(spot: float, contract: dict, rows: list) -> Optional[float]:
 # ─────────────────────────────────────────────
 # 資料快取與背景刷新
 # ─────────────────────────────────────────────
-_cache = {"spot":0.0,"fut":0.0,"hv":25.0,"update_time":"--","contracts":[], "ready":False, "market_status":"--"}
+_cache = {"spot":0.0,"fut":0.0,"hv":25.0,"update_time":"--","data_date":"--","contracts":[], "ready":False, "market_status":"--"}
 _lock  = threading.Lock()
 _hv_last_fetch = 0.0
 _hv_value = 25.0
@@ -608,10 +623,12 @@ def refresh_loop():
 
                 log.append("step6:update_cache")
                 hv_source = "HV" if fetch_hv_local() else "ATM-IV"
+                now_tw = datetime.now()
                 with _lock:
                     _cache.update({
                         "spot": spot, "fut": fut, "hv": hv, "hv_source": hv_source,
-                        "update_time": datetime.now().strftime("%H:%M:%S"),
+                        "update_time": now_tw.strftime("%H:%M:%S"),
+                        "data_date":   now_tw.strftime("%m/%d"),
                         "contracts": results, "ready": True,
                         "market_status": market_status,
                     })
@@ -732,6 +749,7 @@ def api_chain():
             "ready":True,
             "spot":_cache["spot"], "fut":_cache["fut"],
             "hv":_cache["hv"], "update_time":_cache["update_time"],
+            "data_date": _cache.get("data_date","--"),
             "contracts":_cache["contracts"],
             "market_status": _cache.get("market_status", "即時"),
         })
@@ -879,8 +897,8 @@ tr.atm td.sk{color:#fff176;background:#252510}
 <body>
 <div id="hdr">
   <div class="prow">
-    <div><span class="pl">現貨 </span><span class="pv sv" id="sv">--</span></div>
-    <div><span class="pl">期貨 </span><span class="pv fv" id="fv">--</span></div>
+    <div><span class="pl" id="date-label">-- </span><span class="pl">現貨 </span><span class="pv sv" id="sv">--</span></div>
+    <div><span class="pl">小台 </span><span class="pv fv" id="fv">--</span></div>
     <div><span class="pl" id="hv-label">HV </span><span class="pv hv" id="hv">--%</span></div>
     <div class="tv"><span id="dot" class="dot-live"></span><span id="tv">--:--:--</span><span id="msbadge" class="status-badge"></span></div>
   </div>
@@ -1045,6 +1063,7 @@ async function fetchData(){
     document.getElementById('hv').textContent=d.hv?d.hv.toFixed(2)+'%':'--%';
     if(d.hv_source)document.getElementById('hv-label').textContent=d.hv_source+' ';
     document.getElementById('tv').textContent=d.update_time||'--';
+    if(d.data_date&&d.data_date!='--')document.getElementById('date-label').textContent=d.data_date+' ';
     // Market status dot & badge
     const ms=d.market_status||'即時';
     const dot=document.getElementById('dot');
