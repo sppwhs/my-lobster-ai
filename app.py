@@ -283,6 +283,98 @@ def fetch_spot_yahoo() -> float:
         pass
     return 0.0
 
+def _contract_csv_code(contract: dict) -> str:
+    """把 get_active_contracts() 的 contract 轉換成 TAIFEX CSV 的契約代碼"""
+    exp = contract["expiry"]
+    yr, mo = exp.year, exp.month
+    prefix = contract["prefix"]
+    if prefix == "TXO":
+        return f"{yr}{mo:02d}"
+    elif prefix == "TXV":
+        # 數這個 expiry 是當月第幾個週五
+        d, cnt = date(yr, mo, 1), 0
+        while d <= exp:
+            if d.weekday() == 4: cnt += 1
+            d += timedelta(days=1)
+        return f"{yr}{mo:02d}F{cnt}"
+    elif prefix == "TX4":
+        return f"{yr}{mo:02d}W4"
+    return f"{yr}{mo:02d}"
+
+def fetch_settlement_prices_from_csv() -> bool:
+    """
+    服務啟動時，從 TAIFEX CSV 取最近交易日的選擇權收盤價，
+    填入 _last_live_prices 快取，讓收盤期間也能看到成交價。
+    回傳 True=成功，False=失敗
+    """
+    global _last_live_prices
+    # 找最近交易日（往前最多找 7 天）
+    last_trading = None
+    for delta in range(1, 8):
+        d = date.today() - timedelta(days=delta)
+        if d.weekday() < 5:   # 週一到週五
+            last_trading = d
+            break
+    if not last_trading:
+        return False
+    date_str = last_trading.strftime("%Y/%m/%d")
+    try:
+        r = requests.get(
+            "https://www.taifex.com.tw/cht/3/optDataDown",
+            params={"down_type":"1","queryStartDate":date_str,
+                    "queryEndDate":date_str,"commodity_id":"TXO"},
+            headers={"User-Agent":"Mozilla/5.0",
+                     "Referer":"https://www.taifex.com.tw/cht/3/optDailyMarketReport"},
+            timeout=20, verify=False
+        )
+        if r.status_code != 200 or len(r.content) < 500:
+            return False
+        lines = r.content.decode("ms950", errors="replace").strip().split("\n")
+        # 解析成 {csv_code: {strike: {c_last, p_last}}}
+        raw: dict = {}
+        for line in lines[1:]:
+            cols = [c.strip() for c in line.split(",")]
+            if len(cols) < 18: continue
+            csv_code = cols[2].strip()
+            strike_s = cols[3].replace(".0000","").strip()
+            side     = cols[4].strip()       # 買權 / 賣權
+            close_s  = cols[8].strip()       # 收盤價
+            session  = cols[17].strip()      # 一般 / 夜盤
+            if session != "一般": continue   # 只用日盤收盤價
+            try:
+                k = int(float(strike_s))
+                v = float(close_s) if close_s not in ("-","") else 0.0
+            except (ValueError, TypeError):
+                continue
+            if csv_code not in raw:
+                raw[csv_code] = {}
+            if k not in raw[csv_code]:
+                raw[csv_code][k] = {"c_last":0,"c_ref":0,"p_last":0,"p_ref":0}
+            if "買" in side:
+                raw[csv_code][k]["c_last"] = int(v)
+            else:
+                raw[csv_code][k]["p_last"] = int(v)
+        if not raw:
+            return False
+        # 對應到我們的 contracts
+        contracts_meta = get_active_contracts()
+        new_cache: dict = {}
+        for c in contracts_meta:
+            csv_code = _contract_csv_code(c)
+            if csv_code in raw:
+                new_cache[c["label"]] = raw[csv_code]
+        if new_cache:
+            with _lock:
+                for label, prices in new_cache.items():
+                    if label not in _last_live_prices:
+                        _last_live_prices[label] = {}
+                    _last_live_prices[label].update(prices)
+            print(f"[settlement] loaded {last_trading} prices for {list(new_cache.keys())}")
+            return True
+    except Exception as e:
+        print(f"[settlement] error: {e}")
+    return False
+
 def fetch_ref_prices(contract: dict, strikes: list) -> dict:
     """
     收盤時從 TAIFEX API 取各履約價的參考價（CRefPrice）與最後成交（CLastPrice）。
@@ -449,6 +541,8 @@ def refresh_loop():
     global _hv_last_fetch, _hv_value, _last_error, _refresh_log
     _refresh_log = [f"THREAD_STARTED_AT:{datetime.now().isoformat()}"]
     print(f"[refresh_loop] started pid={os.getpid()} tid={threading.current_thread().ident}")
+    # 啟動時預載最近交易日收盤價（讓收盤期間立刻有成交價可看）
+    fetch_settlement_prices_from_csv()
     while True:
         try:
             interval = 6
