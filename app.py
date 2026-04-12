@@ -375,6 +375,8 @@ def fetch_settlement_prices_from_csv() -> bool:
                 raw[csv_code][k]["p_last"] = int(v)
         if not raw:
             return False
+        # CSV 有資料 → 記錄最後交易日日期（不管 contracts 是否對應到）
+        _last_trading_date_str = last_trading.strftime("%m/%d")
         # 對應到我們的 contracts
         contracts_meta = get_active_contracts()
         new_cache: dict = {}
@@ -723,33 +725,36 @@ def _lazy_start():
 
 ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">
   <rect width="192" height="192" rx="36" fill="#0d1117"/>
-  <!-- body -->
-  <ellipse cx="96" cy="108" rx="38" ry="28" fill="#e05a2b"/>
-  <!-- tail segments -->
-  <ellipse cx="96" cy="138" rx="28" ry="10" fill="#c94e22"/>
-  <ellipse cx="96" cy="152" rx="20" ry="8"  fill="#b54420"/>
-  <ellipse cx="96" cy="164" rx="12" ry="6"  fill="#e05a2b"/>
-  <!-- head -->
-  <ellipse cx="96" cy="82" rx="26" ry="20" fill="#e05a2b"/>
-  <!-- eyes -->
-  <circle cx="84" cy="74" r="5" fill="#111"/>
-  <circle cx="108" cy="74" r="5" fill="#111"/>
-  <circle cx="85" cy="73" r="2" fill="#fff"/>
-  <circle cx="109" cy="73" r="2" fill="#fff"/>
-  <!-- antennae -->
-  <line x1="84" y1="70" x2="60" y2="44" stroke="#e05a2b" stroke-width="3" stroke-linecap="round"/>
-  <line x1="108" y1="70" x2="132" y2="44" stroke="#e05a2b" stroke-width="3" stroke-linecap="round"/>
-  <!-- claws left -->
-  <ellipse cx="54" cy="96" rx="14" ry="9" fill="#c94e22" transform="rotate(-30 54 96)"/>
-  <ellipse cx="44" cy="88" rx="9" ry="6"  fill="#e05a2b" transform="rotate(-40 44 88)"/>
-  <!-- claws right -->
-  <ellipse cx="138" cy="96" rx="14" ry="9" fill="#c94e22" transform="rotate(30 138 96)"/>
-  <ellipse cx="148" cy="88" rx="9" ry="6"  fill="#e05a2b" transform="rotate(40 148 88)"/>
-  <!-- legs -->
-  <line x1="72"  y1="116" x2="52"  y2="130" stroke="#b54420" stroke-width="3" stroke-linecap="round"/>
-  <line x1="78"  y1="122" x2="58"  y2="140" stroke="#b54420" stroke-width="3" stroke-linecap="round"/>
-  <line x1="120" y1="116" x2="140" y2="130" stroke="#b54420" stroke-width="3" stroke-linecap="round"/>
-  <line x1="114" y1="122" x2="134" y2="140" stroke="#b54420" stroke-width="3" stroke-linecap="round"/>
+  <!-- vertical pole -->
+  <rect x="89" y="56" width="14" height="118" rx="5" fill="#1d3557"/>
+  <!-- base stand -->
+  <rect x="63" y="166" width="66" height="12" rx="6" fill="#1d3557"/>
+  <!-- beam -->
+  <rect x="14" y="44" width="164" height="16" rx="8" fill="#1d3557"/>
+  <!-- pivot cap -->
+  <circle cx="96" cy="44" r="10" fill="#1d3557"/>
+  <!-- left chains (V from beam-tip to top of left circle) -->
+  <!-- left circle: cx=40 cy=115 r=29, top at y=86 -->
+  <line x1="22" y1="52" x2="14" y2="89" stroke="#1d3557" stroke-width="5" stroke-linecap="round"/>
+  <line x1="22" y1="52" x2="64" y2="89" stroke="#1d3557" stroke-width="5" stroke-linecap="round"/>
+  <!-- left pan plate -->
+  <rect x="11" y="141" width="58" height="8" rx="4" fill="#1d3557"/>
+  <!-- left C circle -->
+  <circle cx="40" cy="115" r="29" fill="#c0392b"/>
+  <text x="40" y="126" text-anchor="middle" dominant-baseline="middle"
+        fill="white" font-size="32" font-weight="bold"
+        font-family="Arial,Helvetica,sans-serif">C</text>
+  <!-- right chains (V from beam-tip to top of right circle) -->
+  <!-- right circle: cx=152 cy=115 r=29, top at y=86 -->
+  <line x1="170" y1="52" x2="178" y2="89" stroke="#1d3557" stroke-width="5" stroke-linecap="round"/>
+  <line x1="170" y1="52" x2="128" y2="89" stroke="#1d3557" stroke-width="5" stroke-linecap="round"/>
+  <!-- right pan plate -->
+  <rect x="123" y="141" width="58" height="8" rx="4" fill="#1d3557"/>
+  <!-- right P circle -->
+  <circle cx="152" cy="115" r="29" fill="#27ae60"/>
+  <text x="152" y="126" text-anchor="middle" dominant-baseline="middle"
+        fill="white" font-size="32" font-weight="bold"
+        font-family="Arial,Helvetica,sans-serif">P</text>
 </svg>"""
 
 MANIFEST_JSON = """{
