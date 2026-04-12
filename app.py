@@ -376,7 +376,7 @@ def fetch_settlement_prices_from_csv() -> bool:
         if not raw:
             return False
         # CSV 有資料 → 記錄最後交易日日期（不管 contracts 是否對應到）
-        _last_trading_date_str = last_trading.strftime("%m/%d")
+        _last_trading_date_str = last_trading.strftime("%Y/%m/%d")
         # 對應到我們的 contracts
         contracts_meta = get_active_contracts()
         new_cache: dict = {}
@@ -390,7 +390,7 @@ def fetch_settlement_prices_from_csv() -> bool:
                     if label not in _last_live_prices:
                         _last_live_prices[label] = {}
                     _last_live_prices[label].update(prices)
-            _last_trading_date_str = last_trading.strftime("%m/%d")
+            _last_trading_date_str = last_trading.strftime("%Y/%m/%d")
             print(f"[settlement] loaded {last_trading} prices for {list(new_cache.keys())}")
             # 順便抓 MTX 近月日盤收盤價
             try:
@@ -666,7 +666,7 @@ def refresh_loop():
                     _cache.update({
                         "spot": spot, "fut": fut, "hv": hv, "hv_source": hv_source,
                         "update_time": now_tw.strftime("%H:%M:%S"),
-                        "data_date":   now_tw.strftime("%m/%d") if market_status == "即時" else _last_trading_date_str,
+                        "data_date":   now_tw.strftime("%Y/%m/%d") if market_status == "即時" else _last_trading_date_str,
                         "contracts": results, "ready": True,
                         "market_status": market_status,
                     })
