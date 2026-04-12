@@ -122,18 +122,21 @@ def get_active_contracts():
         exp = monthly_expiry(yr, mo)
         if exp < today: continue
         label = "月選近月" if found == 0 else "月選次月"
+        days_left = (exp - today).days
+        # 月選近月到期 ≤14 天時 TAIFEX 會新增 50 點區間履約價
+        step = 50 if (found == 0 and days_left <= 14) else 100
         contracts.append({
             "label": f"{label} {yr}/{mo:02d}",
             "expiry": exp,
             "prefix": "TXO",
             "call_suffix": f"{CALL_MONTH_CODES[mo]}{yr%10}-O",
             "put_suffix":  f"{PUT_MONTH_CODES[mo]}{yr%10}-O",
-            "strike_step": 100,
+            "strike_step": step,
         })
         found += 1
         if found >= 2: break
 
-    # 週選 TXV（最近週五）
+    # 週選 TXV（最近週五）— 一律 50 點
     d = date(today.year, today.month, 1)
     fridays = []
     while d.month == today.month:
@@ -148,11 +151,11 @@ def get_active_contracts():
                 "prefix": "TXV",
                 "call_suffix": f"{CALL_MONTH_CODES[mo]}{yr%10}-O",
                 "put_suffix":  f"{PUT_MONTH_CODES[mo]}{yr%10}-O",
-                "strike_step": 100,
+                "strike_step": 50,
             })
             break
 
-    # 週選 TX4（第四週三）
+    # 週選 TX4（第四週三）— 一律 50 點
     d = date(today.year, today.month, 1)
     weds = []
     while d.month == today.month:
@@ -168,7 +171,7 @@ def get_active_contracts():
                 "prefix": "TX4",
                 "call_suffix": f"{CALL_MONTH_CODES[mo]}{yr%10}-O",
                 "put_suffix":  f"{PUT_MONTH_CODES[mo]}{yr%10}-O",
-                "strike_step": 100,
+                "strike_step": 50,
             })
     return contracts
 
