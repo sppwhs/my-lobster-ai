@@ -327,52 +327,75 @@ def fetch_settlement_prices_from_csv() -> bool:
     回傳 True=成功，False=失敗
     """
     global _last_live_prices, _last_trading_date_str, _mtx_settlement_close
-    # 找最近交易日（往前最多找 7 天）
-    last_trading = None
-    for delta in range(1, 8):
+    # 找最近兩個交易日（last=最後交易日, prev=前一個交易日）
+    trading_days = []
+    for delta in range(1, 15):
         d = date.today() - timedelta(days=delta)
-        if d.weekday() < 5:   # 週一到週五
-            last_trading = d
+        if d.weekday() < 5:
+            trading_days.append(d)
+        if len(trading_days) == 2:
             break
-    if not last_trading:
+    if len(trading_days) < 1:
         return False
+    last_trading = trading_days[0]
+    prev_trading = trading_days[1] if len(trading_days) > 1 else None
+
+    def _fetch_opt_csv(day: date) -> dict:
+        """抓單日選擇權 CSV，回傳 {csv_code: {strike: {c:price, p:price}}}"""
+        ds = day.strftime("%Y/%m/%d")
+        try:
+            r = requests.get(
+                "https://www.taifex.com.tw/cht/3/optDataDown",
+                params={"down_type":"1","queryStartDate":ds,
+                        "queryEndDate":ds,"commodity_id":"TXO"},
+                headers={"User-Agent":"Mozilla/5.0",
+                         "Referer":"https://www.taifex.com.tw/cht/3/optDailyMarketReport"},
+                timeout=20, verify=False
+            )
+            if r.status_code != 200 or len(r.content) < 500:
+                return {}
+            result: dict = {}
+            for line in r.content.decode("ms950", errors="replace").strip().split("\n")[1:]:
+                cols = [c.strip() for c in line.split(",")]
+                if len(cols) < 18: continue
+                if cols[17].strip() != "一般": continue
+                csv_code = cols[2].strip()
+                try:
+                    k = int(float(cols[3].replace(".0000","").strip()))
+                    v = float(cols[8].strip()) if cols[8].strip() not in ("-","") else 0.0
+                except (ValueError, TypeError):
+                    continue
+                side = cols[4].strip()
+                if csv_code not in result:
+                    result[csv_code] = {}
+                if k not in result[csv_code]:
+                    result[csv_code][k] = {"c":0,"p":0}
+                if "買" in side:
+                    result[csv_code][k]["c"] = int(v)
+                else:
+                    result[csv_code][k]["p"] = int(v)
+            return result
+        except Exception as e:
+            print(f"[settlement] csv fetch error {day}: {e}")
+            return {}
+
+    raw_last = _fetch_opt_csv(last_trading)
+    raw_prev = _fetch_opt_csv(prev_trading) if prev_trading else {}
+
     date_str = last_trading.strftime("%Y/%m/%d")
     try:
-        r = requests.get(
-            "https://www.taifex.com.tw/cht/3/optDataDown",
-            params={"down_type":"1","queryStartDate":date_str,
-                    "queryEndDate":date_str,"commodity_id":"TXO"},
-            headers={"User-Agent":"Mozilla/5.0",
-                     "Referer":"https://www.taifex.com.tw/cht/3/optDailyMarketReport"},
-            timeout=20, verify=False
-        )
-        if r.status_code != 200 or len(r.content) < 500:
-            return False
-        lines = r.content.decode("ms950", errors="replace").strip().split("\n")
-        # 解析成 {csv_code: {strike: {c_last, p_last}}}
+        # 合併成 {csv_code: {strike: {c_last, c_ref, p_last, p_ref}}}
         raw: dict = {}
-        for line in lines[1:]:
-            cols = [c.strip() for c in line.split(",")]
-            if len(cols) < 18: continue
-            csv_code = cols[2].strip()
-            strike_s = cols[3].replace(".0000","").strip()
-            side     = cols[4].strip()       # 買權 / 賣權
-            close_s  = cols[8].strip()       # 收盤價
-            session  = cols[17].strip()      # 一般 / 夜盤
-            if session != "一般": continue   # 只用日盤收盤價
-            try:
-                k = int(float(strike_s))
-                v = float(close_s) if close_s not in ("-","") else 0.0
-            except (ValueError, TypeError):
-                continue
-            if csv_code not in raw:
-                raw[csv_code] = {}
-            if k not in raw[csv_code]:
-                raw[csv_code][k] = {"c_last":0,"c_ref":0,"p_last":0,"p_ref":0}
-            if "買" in side:
-                raw[csv_code][k]["c_last"] = int(v)
-            else:
-                raw[csv_code][k]["p_last"] = int(v)
+        for csv_code, strikes in raw_last.items():
+            raw[csv_code] = {}
+            for k, prices in strikes.items():
+                prev_prices = raw_prev.get(csv_code, {}).get(k, {"c":0,"p":0})
+                raw[csv_code][k] = {
+                    "c_last": prices["c"],
+                    "c_ref":  prev_prices["c"],
+                    "p_last": prices["p"],
+                    "p_ref":  prev_prices["p"],
+                }
         if not raw:
             return False
         # CSV 有資料 → 記錄最後交易日日期（不管 contracts 是否對應到）
@@ -1157,7 +1180,12 @@ setInterval(fetchData,6000);
 
 @app.route("/")
 def index():
-    return render_template_string(HTML)
+    from flask import make_response
+    resp = make_response(render_template_string(HTML))
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
