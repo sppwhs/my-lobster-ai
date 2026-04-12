@@ -328,29 +328,25 @@ def build_chain_data_closed(contract: dict, spot: float, hv: float) -> list:
     call_syms = [f'{contract["prefix"]}{k}{contract["call_suffix"]}' for k in strikes]
     put_syms  = [f'{contract["prefix"]}{k}{contract["put_suffix"]}'  for k in strikes]
 
-    # 嘗試取參考價（失敗不影響顯示，降級為 0）
-    ref_data = fetch_ref_prices(contract, strikes)
+    # 讀取上次開盤時的成交價快取
+    live_cache = _last_live_prices.get(contract["label"], {})
 
     result = []
-    for k, cs, ps in zip(strikes, call_syms, put_syms):
+    for k in strikes:
         cg = bs_greeks(spot, k, T, RISK_FREE_RATE, sigma, True)
         pg = bs_greeks(spot, k, T, RISK_FREE_RATE, sigma, False)
-        cd = ref_data.get(cs, {})
-        pd = ref_data.get(ps, {})
-        c_last = int(cd.get("last", 0))
-        c_ref  = int(cd.get("ref",  0))
-        p_last = int(pd.get("last", 0))
-        p_ref  = int(pd.get("ref",  0))
-        # 若 CLastPrice=0 但 CRefPrice 有值，用參考價作為成交顯示
-        c_show = c_last or c_ref
-        p_show = p_last or p_ref
+        cached = live_cache.get(k, {})
+        c_last = cached.get("c_last", 0)
+        c_ref  = cached.get("c_ref",  0)
+        p_last = cached.get("p_last", 0)
+        p_ref  = cached.get("p_ref",  0)
         result.append({
             "strike": k,
-            "c_bid":0,"c_ask":0,"c_last":c_show,"c_ref":c_ref,"c_diff":0,"c_iv":None,
+            "c_bid":0,"c_ask":0,"c_last":c_last,"c_ref":c_ref,"c_diff":0,"c_iv":None,
             "c_delta":round(cg.get("delta",0),4),"c_gamma":round(cg.get("gamma",0),6),
             "c_theta":round(cg.get("theta",0),2),"c_vega":round(cg.get("vega",0),2),
             "c_rho":round(cg.get("rho",0),4),
-            "p_bid":0,"p_ask":0,"p_last":p_show,"p_ref":p_ref,"p_diff":0,"p_iv":None,
+            "p_bid":0,"p_ask":0,"p_last":p_last,"p_ref":p_ref,"p_diff":0,"p_iv":None,
             "p_delta":round(pg.get("delta",0),4),"p_gamma":round(pg.get("gamma",0),6),
             "p_theta":round(pg.get("theta",0),2),"p_vega":round(pg.get("vega",0),2),
             "p_rho":round(pg.get("rho",0),4),
@@ -392,13 +388,17 @@ _hv_last_fetch = 0.0
 _hv_value = 25.0
 _last_error = ""
 _refresh_log = []
+# 最後一次開盤時各合約的成交價快取 {contract_label: {strike: {"c_last":x, "p_last":x}}}
+_last_live_prices: dict = {}
 
 def build_chain_data(contract, spot, hv, compute_atm=False):
+    global _last_live_prices
     T = time_to_expiry_years(contract["expiry"])
     rows = fetch_option_chain(contract, spot)
     if compute_atm and hv <= 0:
         hv = compute_atm_iv(spot, contract, rows) or 25.0
     result = []
+    price_cache = {}   # 本次快取，結束後一次寫入 _last_live_prices
     for row in rows:
         k = row["strike"]
         cq, pq = row["call"], row["put"]
@@ -409,6 +409,12 @@ def build_chain_data(contract, spot, hv, compute_atm=False):
         c_last=gf(cq,"CLastPrice"); c_ref=gf(cq,"CRefPrice")
         p_bid=gf(pq,"CBidPrice1"); p_ask=gf(pq,"CAskPrice1")
         p_last=gf(pq,"CLastPrice"); p_ref=gf(pq,"CRefPrice")
+        # 有成交價才存進快取（避免沒成交的合約覆蓋舊資料）
+        if c_last > 0 or p_last > 0:
+            price_cache[k] = {
+                "c_last": int(c_last), "c_ref": int(c_ref),
+                "p_last": int(p_last), "p_ref": int(p_ref),
+            }
         mid_c = (c_bid+c_ask)/2 if c_bid and c_ask else c_last
         mid_p = (p_bid+p_ask)/2 if p_bid and p_ask else p_last
         c_iv = implied_volatility(spot, k, T, RISK_FREE_RATE, mid_c, True) if mid_c>0 and spot>0 else None
@@ -430,6 +436,12 @@ def build_chain_data(contract, spot, hv, compute_atm=False):
             "p_theta":round(pg.get("theta",0),2),"p_vega":round(pg.get("vega",0),2),
             "p_rho":round(pg.get("rho",0),4),
         })
+    # 更新全域快取（只更新有成交的合約）
+    label = contract["label"]
+    if price_cache:
+        if label not in _last_live_prices:
+            _last_live_prices[label] = {}
+        _last_live_prices[label].update(price_cache)
     return result
 
 def refresh_loop():
