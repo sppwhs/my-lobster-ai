@@ -135,43 +135,36 @@ def get_active_contracts():
         found += 1
         if found >= 2: break
 
-    # 週選 TXV（最近週五）— 一律 50 點
-    d = date(today.year, today.month, 1)
-    fridays = []
-    while d.month == today.month:
-        if d.weekday() == 4: fridays.append(d)
-        d += timedelta(days=1)
-    for i, fr in enumerate(fridays, 1):
-        if fr >= today:
-            mo, yr = fr.month, fr.year
-            contracts.append({
-                "label": f"週選F{i} {fr.strftime('%m/%d')}",
-                "expiry": fr,
-                "prefix": "TXV",
-                "call_suffix": f"{CALL_MONTH_CODES[mo]}{yr%10}-O",
-                "put_suffix":  f"{PUT_MONTH_CODES[mo]}{yr%10}-O",
-                "strike_step": 50,
-            })
-            break
+    # ── 週選: 最近 4 個週三選擇權 (TX1-TX5，跳過月選到期日) ──
+    # TAIFEX 週三系列: TX1=第1週三, TX2=第2週三, TX4=第4週三, TX5=第5週三
+    # 第3週三通常是月選到期日 (TXO)，不另列週選
+    weekly_found = []
+    check_d = today
+    while len(weekly_found) < 4 and check_d <= today + timedelta(days=70):
+        if check_d.weekday() == 2:  # Wednesday
+            yr_c, mo_c = check_d.year, check_d.month
+            # 計算是當月第幾個週三
+            d_tmp, cnt = date(yr_c, mo_c, 1), 0
+            while d_tmp <= check_d:
+                if d_tmp.weekday() == 2: cnt += 1
+                d_tmp += timedelta(days=1)
+            # 跳過月選到期日（第3週三 = TXO 到期）
+            if check_d == monthly_expiry(yr_c, mo_c):
+                check_d += timedelta(days=1)
+                continue
+            if 1 <= cnt <= 5:
+                prefix = f"TX{cnt}"
+                weekly_found.append({
+                    "label": f"週選W{cnt} {check_d.strftime('%m/%d')}",
+                    "expiry": check_d,
+                    "prefix": prefix,
+                    "call_suffix": f"{CALL_MONTH_CODES[mo_c]}{yr_c%10}-O",
+                    "put_suffix":  f"{PUT_MONTH_CODES[mo_c]}{yr_c%10}-O",
+                    "strike_step": 50,
+                })
+        check_d += timedelta(days=1)
 
-    # 週選 TX4（第四週三）— 一律 50 點
-    d = date(today.year, today.month, 1)
-    weds = []
-    while d.month == today.month:
-        if d.weekday() == 2: weds.append(d)
-        d += timedelta(days=1)
-    if len(weds) >= 4:
-        w4 = weds[3]
-        if w4 >= today:
-            mo, yr = w4.month, w4.year
-            contracts.append({
-                "label": f"週選W4 {w4.strftime('%m/%d')}",
-                "expiry": w4,
-                "prefix": "TX4",
-                "call_suffix": f"{CALL_MONTH_CODES[mo]}{yr%10}-O",
-                "put_suffix":  f"{PUT_MONTH_CODES[mo]}{yr%10}-O",
-                "strike_step": 50,
-            })
+    contracts.extend(weekly_found)
     return contracts
 
 # ─────────────────────────────────────────────
@@ -328,6 +321,10 @@ def _contract_csv_code(contract: dict) -> str:
     prefix = contract["prefix"]
     if prefix == "TXO":
         return f"{yr}{mo:02d}"
+    elif prefix.startswith("TX") and len(prefix) == 3 and prefix[2].isdigit():
+        # TX1~TX5 → 202604W1 ~ 202604W5
+        n = prefix[2]
+        return f"{yr}{mo:02d}W{n}"
     elif prefix == "TXV":
         # 數這個 expiry 是當月第幾個週五
         d, cnt = date(yr, mo, 1), 0
@@ -335,8 +332,6 @@ def _contract_csv_code(contract: dict) -> str:
             if d.weekday() == 4: cnt += 1
             d += timedelta(days=1)
         return f"{yr}{mo:02d}F{cnt}"
-    elif prefix == "TX4":
-        return f"{yr}{mo:02d}W4"
     return f"{yr}{mo:02d}"
 
 def fetch_settlement_prices_from_csv() -> bool:
@@ -778,8 +773,8 @@ ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">
 </svg>"""
 
 MANIFEST_JSON = """{
-  "name": "龍蝦選擇權",
-  "short_name": "龍蝦選擇權",
+  "name": "NightGod 台指選擇權",
+  "short_name": "NightGod 台指選擇權",
   "description": "台指選擇權即時監控",
   "start_url": "/",
   "display": "standalone",
@@ -866,9 +861,9 @@ HTML = r"""<!DOCTYPE html>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="龍蝦選擇權">
+<meta name="apple-mobile-web-app-title" content="NightGod 台指選擇權">
 <meta name="theme-color" content="#0d1117">
-<title>龍蝦選擇權</title>
+<title>NightGod 台指選擇權</title>
 <link rel="manifest" href="/manifest.json">
 <link rel="apple-touch-icon" href="/icon.svg">
 <link rel="icon" type="image/svg+xml" href="/icon.svg">
