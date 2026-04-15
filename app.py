@@ -336,39 +336,36 @@ def _contract_csv_code(contract: dict) -> str:
 
 def fetch_settlement_prices_from_csv() -> bool:
     """
-    服務啟動時，從 TAIFEX CSV 取最近交易日的選擇權收盤價，
+    從 TAIFEX CSV 取最近交易日（含今天）的選擇權收盤價，
     填入 _last_live_prices 快取，讓收盤期間也能看到成交價。
     同時取 MTX 近月日盤收盤價與最後交易日日期，存入全域變數。
+    從今天往前最多找 7 個交易日，CSV 沒資料就往前一天。
     回傳 True=成功，False=失敗
     """
     global _last_live_prices, _last_trading_date_str, _mtx_settlement_close, _settlement_loaded_date
-    # 找最近交易日（往前最多找 7 天）
-    # 若現在已是台灣時間 14:30 以後的平日，先試今天
-    now_tw = datetime.now()
-    start_delta = 0 if (now_tw.weekday() < 5 and
-                        (now_tw.hour > 14 or (now_tw.hour == 14 and now_tw.minute >= 30))
-                        ) else 1
-    last_trading = None
-    for delta in range(start_delta, 8):
-        d = date.today() - timedelta(days=delta)
-        if d.weekday() < 5:
-            last_trading = d
-            break
-    if not last_trading:
-        return False
 
-    date_str = last_trading.strftime("%Y/%m/%d")
-    try:
-        r = requests.get(
-            "https://www.taifex.com.tw/cht/3/optDataDown",
-            params={"down_type":"1","queryStartDate":date_str,
-                    "queryEndDate":date_str,"commodity_id":"TXO"},
-            headers={"User-Agent":"Mozilla/5.0",
-                     "Referer":"https://www.taifex.com.tw/cht/3/optDailyMarketReport"},
-            timeout=20, verify=False
-        )
+    for delta in range(0, 10):
+        d = date.today() - timedelta(days=delta)
+        if d.weekday() >= 5:   # 跳過週六/日
+            continue
+        date_str = d.strftime("%Y/%m/%d")
+        try:
+            r = requests.get(
+                "https://www.taifex.com.tw/cht/3/optDataDown",
+                params={"down_type":"1","queryStartDate":date_str,
+                        "queryEndDate":date_str,"commodity_id":"TXO"},
+                headers={"User-Agent":"Mozilla/5.0",
+                         "Referer":"https://www.taifex.com.tw/cht/3/optDailyMarketReport"},
+                timeout=20, verify=False
+            )
+        except Exception as e:
+            print(f"[settlement] fetch error {date_str}: {e}")
+            continue
+
         if r.status_code != 200 or len(r.content) < 500:
-            return False
+            print(f"[settlement] no data for {date_str} (status={r.status_code} len={len(r.content)}), trying previous day")
+            continue
+
         # 解析：col[8]=收盤價, col[9]=漲跌點數 → c_ref = c_last - c_diff
         raw: dict = {}
         for line in r.content.decode("ms950", errors="replace").strip().split("\n")[1:]:
@@ -393,11 +390,13 @@ def fetch_settlement_prices_from_csv() -> bool:
             else:
                 raw[csv_code][k]["p_last"] = int(close)
                 raw[csv_code][k]["p_ref"]  = int(close - diff)
+
         if not raw:
-            return False
-        # CSV 有資料 → 記錄最後交易日日期（不管 contracts 是否對應到）
-        _last_trading_date_str = last_trading.strftime("%Y/%m/%d")
-        # 對應到我們的 contracts
+            print(f"[settlement] parsed empty for {date_str}, trying previous day")
+            continue
+
+        # 有資料 → 記錄最後交易日
+        _last_trading_date_str = d.strftime("%Y/%m/%d")
         contracts_meta = get_active_contracts()
         new_cache: dict = {}
         for c in contracts_meta:
@@ -410,42 +409,43 @@ def fetch_settlement_prices_from_csv() -> bool:
                     if label not in _last_live_prices:
                         _last_live_prices[label] = {}
                     _last_live_prices[label].update(prices)
-            _last_trading_date_str = last_trading.strftime("%Y/%m/%d")
-            print(f"[settlement] loaded {last_trading} prices for {list(new_cache.keys())}")
-            # 順便抓 MTX 近月日盤收盤價
-            try:
-                r2 = requests.get(
-                    "https://www.taifex.com.tw/cht/3/futDataDown",
-                    params={"down_type":"1","queryStartDate":date_str,
-                            "queryEndDate":date_str,"commodity_id":"MTX"},
-                    headers={"User-Agent":"Mozilla/5.0",
-                             "Referer":"https://www.taifex.com.tw/cht/3/futDailyMarketReport"},
-                    timeout=15, verify=False
-                )
-                if r2.status_code == 200 and len(r2.content) > 200:
-                    lines2 = r2.content.decode("ms950", errors="replace").strip().split("\n")
-                    best_vol2, best_close2 = 0, 0.0
-                    for line2 in lines2[1:]:
-                        cols2 = [c.strip() for c in line2.split(",")]
-                        if len(cols2) < 18: continue
-                        if cols2[17].strip() != "一般": continue
-                        try:
-                            vol2   = int(cols2[9].replace(",","") or "0")
-                            close2 = float(cols2[6].replace(",","") or "0")
-                            if vol2 > best_vol2 and vol2 > 0 and close2 > 0:
-                                best_vol2   = vol2
-                                best_close2 = close2
-                        except (ValueError, IndexError):
-                            continue
-                    if best_close2 > 0:
-                        _mtx_settlement_close = best_close2
-                        print(f"[settlement] MTX close={best_close2} on {date_str}")
-            except Exception as e2:
-                print(f"[settlement] MTX error: {e2}")
-            _settlement_loaded_date = last_trading
-            return True
-    except Exception as e:
-        print(f"[settlement] error: {e}")
+        print(f"[settlement] loaded {d} prices for {list(new_cache.keys())}")
+
+        # 順便抓 MTX 近月日盤收盤價
+        try:
+            r2 = requests.get(
+                "https://www.taifex.com.tw/cht/3/futDataDown",
+                params={"down_type":"1","queryStartDate":date_str,
+                        "queryEndDate":date_str,"commodity_id":"MTX"},
+                headers={"User-Agent":"Mozilla/5.0",
+                         "Referer":"https://www.taifex.com.tw/cht/3/futDailyMarketReport"},
+                timeout=15, verify=False
+            )
+            if r2.status_code == 200 and len(r2.content) > 200:
+                lines2 = r2.content.decode("ms950", errors="replace").strip().split("\n")
+                best_vol2, best_close2 = 0, 0.0
+                for line2 in lines2[1:]:
+                    cols2 = [c.strip() for c in line2.split(",")]
+                    if len(cols2) < 18: continue
+                    if cols2[17].strip() != "一般": continue
+                    try:
+                        vol2   = int(cols2[9].replace(",","") or "0")
+                        close2 = float(cols2[6].replace(",","") or "0")
+                        if vol2 > best_vol2 and vol2 > 0 and close2 > 0:
+                            best_vol2   = vol2
+                            best_close2 = close2
+                    except (ValueError, IndexError):
+                        continue
+                if best_close2 > 0:
+                    _mtx_settlement_close = best_close2
+                    print(f"[settlement] MTX close={best_close2} on {date_str}")
+        except Exception as e2:
+            print(f"[settlement] MTX error: {e2}")
+
+        _settlement_loaded_date = d
+        return True
+
+    print("[settlement] failed: no CSV data found in past 10 days")
     return False
 
 def fetch_ref_prices(contract: dict, strikes: list) -> dict:
