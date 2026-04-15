@@ -420,7 +420,7 @@ def fetch_settlement_prices_from_csv() -> bool:
                     _last_live_prices[label].update(prices)
         print(f"[settlement] loaded {d} prices for {list(new_cache.keys())}")
 
-        # 順便抓 MTX 近月日盤收盤價
+        # 順便抓 MTX 近月日盤收盤價（只取日盤，且對應今日近月合約）
         try:
             r2 = requests.get(
                 "https://www.taifex.com.tw/cht/3/futDataDown",
@@ -432,22 +432,36 @@ def fetch_settlement_prices_from_csv() -> bool:
             )
             if r2.status_code == 200 and len(r2.content) > 200:
                 lines2 = r2.content.decode("ms950", errors="replace").strip().split("\n")
+                # 根據「今天」計算近月合約代碼（非 CSV 日期）
+                today_d = date.today()
+                tgt_yr, tgt_mo = today_d.year, today_d.month
+                if monthly_expiry(tgt_yr, tgt_mo) < today_d:  # 近月已到期，切次月
+                    tgt_mo += 1
+                    if tgt_mo > 12: tgt_yr += 1; tgt_mo = 1
+                target_code = f"{tgt_yr}{tgt_mo:02d}"
                 best_vol2, best_close2 = 0, 0.0
+                fallback_vol, fallback_close = 0, 0.0
                 for line2 in lines2[1:]:
                     cols2 = [c.strip() for c in line2.split(",")]
                     if len(cols2) < 18: continue
-                    if cols2[17].strip() != "一般": continue
+                    if cols2[17].strip() != "一般": continue  # 只取日盤
                     try:
+                        month_code = cols2[2].strip()
                         vol2   = int(cols2[9].replace(",","") or "0")
                         close2 = float(cols2[6].replace(",","") or "0")
-                        if vol2 > best_vol2 and vol2 > 0 and close2 > 0:
-                            best_vol2   = vol2
-                            best_close2 = close2
+                        if vol2 > 0 and close2 > 0:
+                            if month_code.startswith(target_code):  # 目標近月
+                                if vol2 > best_vol2:
+                                    best_vol2, best_close2 = vol2, close2
+                            if vol2 > fallback_vol:  # 全部最高量備用
+                                fallback_vol, fallback_close = vol2, close2
                     except (ValueError, IndexError):
                         continue
-                if best_close2 > 0:
-                    _mtx_settlement_close = best_close2
-                    print(f"[settlement] MTX close={best_close2} on {date_str}")
+                result_close = best_close2 if best_close2 > 0 else fallback_close
+                if result_close > 0:
+                    _mtx_settlement_close = result_close
+                    used = target_code if best_close2 > 0 else "fallback"
+                    print(f"[settlement] MTX close={result_close} on {date_str} (contract={used})")
         except Exception as e2:
             print(f"[settlement] MTX error: {e2}")
 
