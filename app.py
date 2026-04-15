@@ -135,33 +135,42 @@ def get_active_contracts():
         found += 1
         if found >= 2: break
 
-    # ── 週選: 最近 4 個週三選擇權 (TX1-TX5，跳過月選到期日) ──
-    # TAIFEX 週三系列: TX1=第1週三, TX2=第2週三, TX4=第4週三, TX5=第5週三
-    # 第3週三通常是月選到期日 (TXO)，不另列週選
+    # ── 週選: 最近 4 個週選 (週三 TX1-TX5 + 週五 TXV，按到期日排序) ──
+    # 第3週三通常是月選到期日，不另列週選
     weekly_found = []
     check_d = today
     while len(weekly_found) < 4 and check_d <= today + timedelta(days=70):
+        yr_c, mo_c = check_d.year, check_d.month
         if check_d.weekday() == 2:  # Wednesday
-            yr_c, mo_c = check_d.year, check_d.month
             # 計算是當月第幾個週三
             d_tmp, cnt = date(yr_c, mo_c, 1), 0
             while d_tmp <= check_d:
                 if d_tmp.weekday() == 2: cnt += 1
                 d_tmp += timedelta(days=1)
             # 跳過月選到期日（第3週三 = TXO 到期）
-            if check_d == monthly_expiry(yr_c, mo_c):
-                check_d += timedelta(days=1)
-                continue
-            if 1 <= cnt <= 5:
-                prefix = f"TX{cnt}"
+            if check_d != monthly_expiry(yr_c, mo_c) and 1 <= cnt <= 5:
                 weekly_found.append({
                     "label": f"週選W{cnt} {check_d.strftime('%m/%d')}",
                     "expiry": check_d,
-                    "prefix": prefix,
+                    "prefix": f"TX{cnt}",
                     "call_suffix": f"{CALL_MONTH_CODES[mo_c]}{yr_c%10}-O",
                     "put_suffix":  f"{PUT_MONTH_CODES[mo_c]}{yr_c%10}-O",
                     "strike_step": 50,
                 })
+        elif check_d.weekday() == 4:  # Friday
+            # 計算是當月第幾個週五
+            d_tmp, cnt = date(yr_c, mo_c, 1), 0
+            while d_tmp <= check_d:
+                if d_tmp.weekday() == 4: cnt += 1
+                d_tmp += timedelta(days=1)
+            weekly_found.append({
+                "label": f"週選F{cnt} {check_d.strftime('%m/%d')}",
+                "expiry": check_d,
+                "prefix": "TXV",
+                "call_suffix": f"{CALL_MONTH_CODES[mo_c]}{yr_c%10}-O",
+                "put_suffix":  f"{PUT_MONTH_CODES[mo_c]}{yr_c%10}-O",
+                "strike_step": 50,
+            })
         check_d += timedelta(days=1)
 
     contracts.extend(weekly_found)
@@ -489,12 +498,15 @@ def build_chain_data_closed(contract: dict, spot: float, hv: float) -> list:
     atm_r = round(spot / step) * step
     sigma = max(hv, 10.0) / 100
 
-    strikes = [atm_r + i * step for i in range(-18, 19)]
-    call_syms = [f'{contract["prefix"]}{k}{contract["call_suffix"]}' for k in strikes]
-    put_syms  = [f'{contract["prefix"]}{k}{contract["put_suffix"]}'  for k in strikes]
-
-    # 讀取上次開盤時的成交價快取
+    # 讀取 CSV 快取，用實際有資料的履約價範圍（比硬寫 ±18 準確）
     live_cache = _last_live_prices.get(contract["label"], {})
+    cached_ks = sorted(k for k in live_cache.keys() if isinstance(k, (int, float)))
+    if cached_ks:
+        lo = min(int(cached_ks[0]),  atm_r - 18 * step)
+        hi = max(int(cached_ks[-1]), atm_r + 18 * step)
+    else:
+        lo, hi = atm_r - 18 * step, atm_r + 18 * step
+    strikes = list(range(lo, hi + step, step))
 
     result = []
     for k in strikes:
@@ -811,17 +823,21 @@ def serve_manifest():
 
 @app.route("/api/chain")
 def api_chain():
+    from flask import make_response
     with _lock:
         if not _cache["ready"]:
             return jsonify({"ready": False})
-        return jsonify({
+        resp = make_response(jsonify({
             "ready":True,
             "spot":_cache["spot"], "fut":_cache["fut"],
             "hv":_cache["hv"], "update_time":_cache["update_time"],
             "data_date": _cache.get("data_date","--"),
             "contracts":_cache["contracts"],
             "market_status": _cache.get("market_status", "即時"),
-        })
+        }))
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 
 @app.route("/health")
 def health():
