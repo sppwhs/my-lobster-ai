@@ -216,12 +216,26 @@ def fetch_underlying():
 def fetch_option_chain(contract, atm, wings=18):
     step = contract["strike_step"]
     atm_r = round(atm / step) * step
-    strikes = [atm_r + i*step for i in range(-wings, wings+1)]
+    # 月選用寬範圍（ATM -10000 ~ +6000），週選維持原本小範圍
+    if wings == 18:  # 預設呼叫 → 依合約類型決定範圍
+        if step == 100:   # 月選
+            lo = atm_r - 10000
+            hi = atm_r + 6000
+        else:             # 週選 step=50
+            lo = atm_r - 3000
+            hi = atm_r + 2000
+        strikes = list(range(lo, hi + step, step))
+    else:
+        strikes = [atm_r + i*step for i in range(-wings, wings+1)]
+
     call_syms = [f'{contract["prefix"]}{s}{contract["call_suffix"]}' for s in strikes]
     put_syms  = [f'{contract["prefix"]}{s}{contract["put_suffix"]}'  for s in strikes]
+    all_syms  = call_syms + put_syms
     chain_data = {}
-    for batch in [call_syms[:40]+put_syms[:40], call_syms[40:]+put_syms[40:]]:
-        if not batch: continue
+    # 正確分批（每批80個，處理任意數量）
+    batch_size = 80
+    for i in range(0, len(all_syms), batch_size):
+        batch = all_syms[i:i+batch_size]
         try:
             r = requests.post(BASE+"getQuoteDetail",
                 json={"SymbolID": batch},
@@ -231,7 +245,13 @@ def fetch_option_chain(contract, atm, wings=18):
         except: pass
     rows = []
     for k, cs, ps in zip(strikes, call_syms, put_syms):
-        rows.append({"strike":k, "call":chain_data.get(cs,{}), "put":chain_data.get(ps,{})})
+        cq = chain_data.get(cs, {})
+        pq = chain_data.get(ps, {})
+        # 過濾掉完全沒資料的履約價（參考價與成交價均空）
+        if not cq.get("CRefPrice") and not pq.get("CRefPrice") \
+                and not cq.get("CLastPrice") and not pq.get("CLastPrice"):
+            continue
+        rows.append({"strike":k, "call":cq, "put":pq})
     return rows
 
 def fetch_hv_local() -> Optional[float]:
