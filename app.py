@@ -135,43 +135,36 @@ def get_active_contracts():
         found += 1
         if found >= 2: break
 
-    # 週選 TXV（最近週五）— 一律 50 點
-    d = date(today.year, today.month, 1)
-    fridays = []
-    while d.month == today.month:
-        if d.weekday() == 4: fridays.append(d)
-        d += timedelta(days=1)
-    for i, fr in enumerate(fridays, 1):
-        if fr >= today:
-            mo, yr = fr.month, fr.year
-            contracts.append({
-                "label": f"週選F{i} {fr.strftime('%m/%d')}",
-                "expiry": fr,
-                "prefix": "TXV",
-                "call_suffix": f"{CALL_MONTH_CODES[mo]}{yr%10}-O",
-                "put_suffix":  f"{PUT_MONTH_CODES[mo]}{yr%10}-O",
-                "strike_step": 50,
-            })
-            break
+    # ── 週選: 最近 4 個週三選擇權 (TX1-TX5，跳過月選到期日) ──
+    # TAIFEX 週三系列: TX1=第1週三, TX2=第2週三, TX4=第4週三, TX5=第5週三
+    # 第3週三通常是月選到期日 (TXO)，不另列週選
+    weekly_found = []
+    check_d = today
+    while len(weekly_found) < 4 and check_d <= today + timedelta(days=70):
+        if check_d.weekday() == 2:  # Wednesday
+            yr_c, mo_c = check_d.year, check_d.month
+            # 計算是當月第幾個週三
+            d_tmp, cnt = date(yr_c, mo_c, 1), 0
+            while d_tmp <= check_d:
+                if d_tmp.weekday() == 2: cnt += 1
+                d_tmp += timedelta(days=1)
+            # 跳過月選到期日（第3週三 = TXO 到期）
+            if check_d == monthly_expiry(yr_c, mo_c):
+                check_d += timedelta(days=1)
+                continue
+            if 1 <= cnt <= 5:
+                prefix = f"TX{cnt}"
+                weekly_found.append({
+                    "label": f"週選W{cnt} {check_d.strftime('%m/%d')}",
+                    "expiry": check_d,
+                    "prefix": prefix,
+                    "call_suffix": f"{CALL_MONTH_CODES[mo_c]}{yr_c%10}-O",
+                    "put_suffix":  f"{PUT_MONTH_CODES[mo_c]}{yr_c%10}-O",
+                    "strike_step": 50,
+                })
+        check_d += timedelta(days=1)
 
-    # 週選 TX4（第四週三）— 一律 50 點
-    d = date(today.year, today.month, 1)
-    weds = []
-    while d.month == today.month:
-        if d.weekday() == 2: weds.append(d)
-        d += timedelta(days=1)
-    if len(weds) >= 4:
-        w4 = weds[3]
-        if w4 >= today:
-            mo, yr = w4.month, w4.year
-            contracts.append({
-                "label": f"週選W4 {w4.strftime('%m/%d')}",
-                "expiry": w4,
-                "prefix": "TX4",
-                "call_suffix": f"{CALL_MONTH_CODES[mo]}{yr%10}-O",
-                "put_suffix":  f"{PUT_MONTH_CODES[mo]}{yr%10}-O",
-                "strike_step": 50,
-            })
+    contracts.extend(weekly_found)
     return contracts
 
 # ─────────────────────────────────────────────
@@ -216,12 +209,26 @@ def fetch_underlying():
 def fetch_option_chain(contract, atm, wings=18):
     step = contract["strike_step"]
     atm_r = round(atm / step) * step
-    strikes = [atm_r + i*step for i in range(-wings, wings+1)]
+    # 月選用寬範圍（ATM -10000 ~ +6000），週選維持原本小範圍
+    if wings == 18:  # 預設呼叫 → 依合約類型決定範圍
+        if step == 100:   # 月選
+            lo = atm_r - 10000
+            hi = atm_r + 6000
+        else:             # 週選 step=50
+            lo = atm_r - 3000
+            hi = atm_r + 2000
+        strikes = list(range(lo, hi + step, step))
+    else:
+        strikes = [atm_r + i*step for i in range(-wings, wings+1)]
+
     call_syms = [f'{contract["prefix"]}{s}{contract["call_suffix"]}' for s in strikes]
     put_syms  = [f'{contract["prefix"]}{s}{contract["put_suffix"]}'  for s in strikes]
+    all_syms  = call_syms + put_syms
     chain_data = {}
-    for batch in [call_syms[:40]+put_syms[:40], call_syms[40:]+put_syms[40:]]:
-        if not batch: continue
+    # 正確分批（每批80個，處理任意數量）
+    batch_size = 80
+    for i in range(0, len(all_syms), batch_size):
+        batch = all_syms[i:i+batch_size]
         try:
             r = requests.post(BASE+"getQuoteDetail",
                 json={"SymbolID": batch},
@@ -231,7 +238,13 @@ def fetch_option_chain(contract, atm, wings=18):
         except: pass
     rows = []
     for k, cs, ps in zip(strikes, call_syms, put_syms):
-        rows.append({"strike":k, "call":chain_data.get(cs,{}), "put":chain_data.get(ps,{})})
+        cq = chain_data.get(cs, {})
+        pq = chain_data.get(ps, {})
+        # 過濾掉完全沒資料的履約價（參考價與成交價均空）
+        if not cq.get("CRefPrice") and not pq.get("CRefPrice") \
+                and not cq.get("CLastPrice") and not pq.get("CLastPrice"):
+            continue
+        rows.append({"strike":k, "call":cq, "put":pq})
     return rows
 
 def fetch_hv_local() -> Optional[float]:
@@ -308,6 +321,10 @@ def _contract_csv_code(contract: dict) -> str:
     prefix = contract["prefix"]
     if prefix == "TXO":
         return f"{yr}{mo:02d}"
+    elif prefix.startswith("TX") and len(prefix) == 3 and prefix[2].isdigit():
+        # TX1~TX5 → 202604W1 ~ 202604W5
+        n = prefix[2]
+        return f"{yr}{mo:02d}W{n}"
     elif prefix == "TXV":
         # 數這個 expiry 是當月第幾個週五
         d, cnt = date(yr, mo, 1), 0
@@ -315,8 +332,6 @@ def _contract_csv_code(contract: dict) -> str:
             if d.weekday() == 4: cnt += 1
             d += timedelta(days=1)
         return f"{yr}{mo:02d}F{cnt}"
-    elif prefix == "TX4":
-        return f"{yr}{mo:02d}W4"
     return f"{yr}{mo:02d}"
 
 def fetch_settlement_prices_from_csv() -> bool:
@@ -326,10 +341,15 @@ def fetch_settlement_prices_from_csv() -> bool:
     同時取 MTX 近月日盤收盤價與最後交易日日期，存入全域變數。
     回傳 True=成功，False=失敗
     """
-    global _last_live_prices, _last_trading_date_str, _mtx_settlement_close
+    global _last_live_prices, _last_trading_date_str, _mtx_settlement_close, _settlement_loaded_date
     # 找最近交易日（往前最多找 7 天）
+    # 若現在已是台灣時間 14:30 以後的平日，先試今天
+    now_tw = datetime.now()
+    start_delta = 0 if (now_tw.weekday() < 5 and
+                        (now_tw.hour > 14 or (now_tw.hour == 14 and now_tw.minute >= 30))
+                        ) else 1
     last_trading = None
-    for delta in range(1, 8):
+    for delta in range(start_delta, 8):
         d = date.today() - timedelta(days=delta)
         if d.weekday() < 5:
             last_trading = d
@@ -422,6 +442,7 @@ def fetch_settlement_prices_from_csv() -> bool:
                         print(f"[settlement] MTX close={best_close2} on {date_str}")
             except Exception as e2:
                 print(f"[settlement] MTX error: {e2}")
+            _settlement_loaded_date = last_trading
             return True
     except Exception as e:
         print(f"[settlement] error: {e}")
@@ -537,6 +558,7 @@ _last_live_prices: dict = {}
 # 最後一個交易日資訊（由 fetch_settlement_prices_from_csv 填入）
 _last_trading_date_str = "--"   # e.g. "04/10"
 _mtx_settlement_close  = 0.0   # MTX 近月合約日盤收盤價
+_settlement_loaded_date = None  # 已成功載入結算價的日期（date 物件）
 
 def build_chain_data(contract, spot, hv, compute_atm=False):
     global _last_live_prices
@@ -593,7 +615,7 @@ def build_chain_data(contract, spot, hv, compute_atm=False):
 
 def refresh_loop():
     import traceback as _tb
-    global _hv_last_fetch, _hv_value, _last_error, _refresh_log
+    global _hv_last_fetch, _hv_value, _last_error, _refresh_log, _settlement_loaded_date
     _refresh_log = [f"THREAD_STARTED_AT:{datetime.now().isoformat()}"]
     print(f"[refresh_loop] started pid={os.getpid()} tid={threading.current_thread().ident}")
     # 啟動時預載最近交易日收盤價（讓收盤期間立刻有成交價可看）
@@ -612,6 +634,12 @@ def refresh_loop():
                 log.append(f"step1_done:spot={spot}")
 
                 if spot <= 0 or not market_open:
+                    # 收盤：若今日結算價尚未載入，嘗試重新抓取（每 300s 最多一次）
+                    today_d = date.today()
+                    if _settlement_loaded_date != today_d:
+                        log.append("step1b:re_fetch_settlement")
+                        fetch_settlement_prices_from_csv()
+                        log.append(f"step1b_done:loaded={_settlement_loaded_date}")
                     # 收盤：用 Yahoo Finance 取最新收盤價
                     if spot <= 0:
                         log.append("step2:fetch_yahoo")
@@ -758,8 +786,8 @@ ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">
 </svg>"""
 
 MANIFEST_JSON = """{
-  "name": "龍蝦選擇權",
-  "short_name": "龍蝦選擇權",
+  "name": "NightGod 台指選擇權",
+  "short_name": "NightGod 台指選擇權",
   "description": "台指選擇權即時監控",
   "start_url": "/",
   "display": "standalone",
@@ -846,9 +874,9 @@ HTML = r"""<!DOCTYPE html>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="龍蝦選擇權">
+<meta name="apple-mobile-web-app-title" content="NightGod 台指選擇權">
 <meta name="theme-color" content="#0d1117">
-<title>龍蝦選擇權</title>
+<title>NightGod 台指選擇權</title>
 <link rel="manifest" href="/manifest.json">
 <link rel="apple-touch-icon" href="/icon.svg">
 <link rel="icon" type="image/svg+xml" href="/icon.svg">
