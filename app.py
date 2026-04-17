@@ -135,42 +135,81 @@ def get_active_contracts():
         found += 1
         if found >= 2: break
 
-    # ── 週選: 最近 4 個週三選擇權 (TX1-TX5，跳過月選到期日) ──
-    # TAIFEX 週三系列: TX1=第1週三, TX2=第2週三, TX4=第4週三, TX5=第5週三
-    # 第3週三通常是月選到期日 (TXO)，不另列週選
+    # ── 週選: 最近 4 個週選 (週三 TX1/TX2/TX4 + 週五 TX5，按到期日排序) ──
+    # TX1=第1週三, TX2=第2週三, TX4=第4週三（第3週三=月選到期，跳過）
+    # TX5=週五週選（非第5週三，TAIFEX 以 TX5 代碼掛牌所有週五選擇權）
     weekly_found = []
     check_d = today
     while len(weekly_found) < 4 and check_d <= today + timedelta(days=70):
+        yr_c, mo_c = check_d.year, check_d.month
         if check_d.weekday() == 2:  # Wednesday
-            yr_c, mo_c = check_d.year, check_d.month
             # 計算是當月第幾個週三
             d_tmp, cnt = date(yr_c, mo_c, 1), 0
             while d_tmp <= check_d:
                 if d_tmp.weekday() == 2: cnt += 1
                 d_tmp += timedelta(days=1)
-            # 跳過月選到期日（第3週三 = TXO 到期）
-            if check_d == monthly_expiry(yr_c, mo_c):
-                check_d += timedelta(days=1)
-                continue
-            if 1 <= cnt <= 5:
-                prefix = f"TX{cnt}"
+            # 只掛牌 TX1/TX2/TX4：跳過月選到期日(第3週三)及不存在的第5週三
+            if check_d != monthly_expiry(yr_c, mo_c) and cnt in (1, 2, 4):
                 weekly_found.append({
                     "label": f"週選W{cnt} {check_d.strftime('%m/%d')}",
                     "expiry": check_d,
-                    "prefix": prefix,
+                    "prefix": f"TX{cnt}",
                     "call_suffix": f"{CALL_MONTH_CODES[mo_c]}{yr_c%10}-O",
                     "put_suffix":  f"{PUT_MONTH_CODES[mo_c]}{yr_c%10}-O",
                     "strike_step": 50,
                 })
+        elif check_d.weekday() == 4:  # Friday
+            # 計算是當月第幾個週五
+            d_tmp, cnt = date(yr_c, mo_c, 1), 0
+            while d_tmp <= check_d:
+                if d_tmp.weekday() == 4: cnt += 1
+                d_tmp += timedelta(days=1)
+            weekly_found.append({
+                "label": f"週選F{cnt} {check_d.strftime('%m/%d')}",
+                "expiry": check_d,
+                "prefix": "TX5",   # TAIFEX 週五選擇權統一使用 TX5 代碼
+                "call_suffix": f"{CALL_MONTH_CODES[mo_c]}{yr_c%10}-O",
+                "put_suffix":  f"{PUT_MONTH_CODES[mo_c]}{yr_c%10}-O",
+                "strike_step": 50,
+            })
         check_d += timedelta(days=1)
 
     contracts.extend(weekly_found)
     return contracts
 
 # ─────────────────────────────────────────────
-# TAIFEX API
+# 資料源：優先使用本地代理（元大/兆豐），備援 TAIFEX MIS
+# 設定環境變數 DATA_PROXY_URL 或直接在 localhost:5002 啟動本地資料代理.py
 # ─────────────────────────────────────────────
-BASE = "https://mis.bq888.taifex.com.tw/futures/api/"
+_TAIFEX_BASE = "https://mis.bq888.taifex.com.tw/futures/api/"
+_PROXY_BASE  = os.environ.get("DATA_PROXY_URL", "http://localhost:5002/futures/api/")
+
+def _probe_proxy(url: str, timeout: float = 1.0) -> bool:
+    """快速探測本地代理是否在線"""
+    try:
+        r = requests.get(url.replace("/futures/api/", "/health"), timeout=timeout, verify=False)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+# 啟動時探測一次；之後每 60 秒重試
+_proxy_ok     = False
+_proxy_check_at = 0.0
+
+def _get_base() -> str:
+    """取得目前有效的 API base URL（代理優先，不在日盤則不用代理）"""
+    global _proxy_ok, _proxy_check_at
+    now = time.time()
+    if now - _proxy_check_at > 60:
+        _proxy_check_at = now
+        _proxy_ok = _probe_proxy(_PROXY_BASE)
+        if _proxy_ok:
+            print(f"[資料源] 本地代理上線 → {_PROXY_BASE}")
+        else:
+            print(f"[資料源] 本地代理離線 → 使用 TAIFEX MIS")
+    return _PROXY_BASE if _proxy_ok else _TAIFEX_BASE
+
+BASE = _TAIFEX_BASE   # 執行時透過 _get_base() 動態取得
 HDRS = {"User-Agent": "Mozilla/5.0"}
 
 def _near_month_futures_sym(prefix="MXF") -> str:
@@ -186,11 +225,13 @@ def _near_month_futures_sym(prefix="MXF") -> str:
 def fetch_underlying():
     """
     抓台指現貨（TXO-Q）與小台近月期貨（MXF）日盤即時報價。
+    優先使用本地代理（元大/兆豐），備援 TAIFEX MIS。
     回傳 (spot, fut)，失敗時回傳 (0.0, 0.0)。
     """
     mxf_sym = _near_month_futures_sym("MXF")
+    base = _get_base()
     try:
-        r = requests.post(BASE+"getQuoteDetail",
+        r = requests.post(base+"getQuoteDetail",
             json={"SymbolID":["TXO-Q", mxf_sym]},
             headers=HDRS, timeout=8, verify=False, allow_redirects=False)
         if r.status_code != 200:
@@ -225,12 +266,13 @@ def fetch_option_chain(contract, atm, wings=18):
     put_syms  = [f'{contract["prefix"]}{s}{contract["put_suffix"]}'  for s in strikes]
     all_syms  = call_syms + put_syms
     chain_data = {}
+    base = _get_base()
     # 正確分批（每批80個，處理任意數量）
     batch_size = 80
     for i in range(0, len(all_syms), batch_size):
         batch = all_syms[i:i+batch_size]
         try:
-            r = requests.post(BASE+"getQuoteDetail",
+            r = requests.post(base+"getQuoteDetail",
                 json={"SymbolID": batch},
                 headers=HDRS, timeout=10, verify=False)
             for q in r.json().get("RtData",{}).get("QuoteList",[]):
@@ -336,34 +378,36 @@ def _contract_csv_code(contract: dict) -> str:
 
 def fetch_settlement_prices_from_csv() -> bool:
     """
-    服務啟動時，從 TAIFEX CSV 取最近交易日的選擇權收盤價，
+    從 TAIFEX CSV 取最近交易日（含今天）的選擇權收盤價，
     填入 _last_live_prices 快取，讓收盤期間也能看到成交價。
     同時取 MTX 近月日盤收盤價與最後交易日日期，存入全域變數。
+    從今天往前最多找 7 個交易日，CSV 沒資料就往前一天。
     回傳 True=成功，False=失敗
     """
-    global _last_live_prices, _last_trading_date_str, _mtx_settlement_close
-    # 找最近交易日（往前最多找 7 天）
-    last_trading = None
-    for delta in range(1, 8):
-        d = date.today() - timedelta(days=delta)
-        if d.weekday() < 5:
-            last_trading = d
-            break
-    if not last_trading:
-        return False
+    global _last_live_prices, _last_trading_date_str, _mtx_settlement_close, _settlement_loaded_date
 
-    date_str = last_trading.strftime("%Y/%m/%d")
-    try:
-        r = requests.get(
-            "https://www.taifex.com.tw/cht/3/optDataDown",
-            params={"down_type":"1","queryStartDate":date_str,
-                    "queryEndDate":date_str,"commodity_id":"TXO"},
-            headers={"User-Agent":"Mozilla/5.0",
-                     "Referer":"https://www.taifex.com.tw/cht/3/optDailyMarketReport"},
-            timeout=20, verify=False
-        )
+    for delta in range(0, 10):
+        d = date.today() - timedelta(days=delta)
+        if d.weekday() >= 5:   # 跳過週六/日
+            continue
+        date_str = d.strftime("%Y/%m/%d")
+        try:
+            r = requests.get(
+                "https://www.taifex.com.tw/cht/3/optDataDown",
+                params={"down_type":"1","queryStartDate":date_str,
+                        "queryEndDate":date_str,"commodity_id":"TXO"},
+                headers={"User-Agent":"Mozilla/5.0",
+                         "Referer":"https://www.taifex.com.tw/cht/3/optDailyMarketReport"},
+                timeout=20, verify=False
+            )
+        except Exception as e:
+            print(f"[settlement] fetch error {date_str}: {e}")
+            continue
+
         if r.status_code != 200 or len(r.content) < 500:
-            return False
+            print(f"[settlement] no data for {date_str} (status={r.status_code} len={len(r.content)}), trying previous day")
+            continue
+
         # 解析：col[8]=收盤價, col[9]=漲跌點數 → c_ref = c_last - c_diff
         raw: dict = {}
         for line in r.content.decode("ms950", errors="replace").strip().split("\n")[1:]:
@@ -388,11 +432,13 @@ def fetch_settlement_prices_from_csv() -> bool:
             else:
                 raw[csv_code][k]["p_last"] = int(close)
                 raw[csv_code][k]["p_ref"]  = int(close - diff)
+
         if not raw:
-            return False
-        # CSV 有資料 → 記錄最後交易日日期（不管 contracts 是否對應到）
-        _last_trading_date_str = last_trading.strftime("%Y/%m/%d")
-        # 對應到我們的 contracts
+            print(f"[settlement] parsed empty for {date_str}, trying previous day")
+            continue
+
+        # 有資料 → 記錄最後交易日
+        _last_trading_date_str = d.strftime("%Y/%m/%d")
         contracts_meta = get_active_contracts()
         new_cache: dict = {}
         for c in contracts_meta:
@@ -405,41 +451,57 @@ def fetch_settlement_prices_from_csv() -> bool:
                     if label not in _last_live_prices:
                         _last_live_prices[label] = {}
                     _last_live_prices[label].update(prices)
-            _last_trading_date_str = last_trading.strftime("%Y/%m/%d")
-            print(f"[settlement] loaded {last_trading} prices for {list(new_cache.keys())}")
-            # 順便抓 MTX 近月日盤收盤價
-            try:
-                r2 = requests.get(
-                    "https://www.taifex.com.tw/cht/3/futDataDown",
-                    params={"down_type":"1","queryStartDate":date_str,
-                            "queryEndDate":date_str,"commodity_id":"MTX"},
-                    headers={"User-Agent":"Mozilla/5.0",
-                             "Referer":"https://www.taifex.com.tw/cht/3/futDailyMarketReport"},
-                    timeout=15, verify=False
-                )
-                if r2.status_code == 200 and len(r2.content) > 200:
-                    lines2 = r2.content.decode("ms950", errors="replace").strip().split("\n")
-                    best_vol2, best_close2 = 0, 0.0
-                    for line2 in lines2[1:]:
-                        cols2 = [c.strip() for c in line2.split(",")]
-                        if len(cols2) < 18: continue
-                        if cols2[17].strip() != "一般": continue
-                        try:
-                            vol2   = int(cols2[9].replace(",","") or "0")
-                            close2 = float(cols2[6].replace(",","") or "0")
-                            if vol2 > best_vol2 and vol2 > 0 and close2 > 0:
-                                best_vol2   = vol2
-                                best_close2 = close2
-                        except (ValueError, IndexError):
-                            continue
-                    if best_close2 > 0:
-                        _mtx_settlement_close = best_close2
-                        print(f"[settlement] MTX close={best_close2} on {date_str}")
-            except Exception as e2:
-                print(f"[settlement] MTX error: {e2}")
-            return True
-    except Exception as e:
-        print(f"[settlement] error: {e}")
+        print(f"[settlement] loaded {d} prices for {list(new_cache.keys())}")
+
+        # 順便抓 MTX 近月日盤收盤價（只取日盤，且對應今日近月合約）
+        try:
+            r2 = requests.get(
+                "https://www.taifex.com.tw/cht/3/futDataDown",
+                params={"down_type":"1","queryStartDate":date_str,
+                        "queryEndDate":date_str,"commodity_id":"MTX"},
+                headers={"User-Agent":"Mozilla/5.0",
+                         "Referer":"https://www.taifex.com.tw/cht/3/futDailyMarketReport"},
+                timeout=15, verify=False
+            )
+            if r2.status_code == 200 and len(r2.content) > 200:
+                lines2 = r2.content.decode("ms950", errors="replace").strip().split("\n")
+                # 根據「今天」計算近月合約代碼（非 CSV 日期）
+                today_d = date.today()
+                tgt_yr, tgt_mo = today_d.year, today_d.month
+                if monthly_expiry(tgt_yr, tgt_mo) < today_d:  # 近月已到期，切次月
+                    tgt_mo += 1
+                    if tgt_mo > 12: tgt_yr += 1; tgt_mo = 1
+                target_code = f"{tgt_yr}{tgt_mo:02d}"
+                best_vol2, best_close2 = 0, 0.0
+                fallback_vol, fallback_close = 0, 0.0
+                for line2 in lines2[1:]:
+                    cols2 = [c.strip() for c in line2.split(",")]
+                    if len(cols2) < 18: continue
+                    if cols2[17].strip() != "一般": continue  # 只取日盤
+                    try:
+                        month_code = cols2[2].strip()
+                        vol2   = int(cols2[9].replace(",","") or "0")
+                        close2 = float(cols2[6].replace(",","") or "0")
+                        if vol2 > 0 and close2 > 0:
+                            if month_code.startswith(target_code):  # 目標近月
+                                if vol2 > best_vol2:
+                                    best_vol2, best_close2 = vol2, close2
+                            if vol2 > fallback_vol:  # 全部最高量備用
+                                fallback_vol, fallback_close = vol2, close2
+                    except (ValueError, IndexError):
+                        continue
+                result_close = best_close2 if best_close2 > 0 else fallback_close
+                if result_close > 0:
+                    _mtx_settlement_close = result_close
+                    used = target_code if best_close2 > 0 else "fallback"
+                    print(f"[settlement] MTX close={result_close} on {date_str} (contract={used})")
+        except Exception as e2:
+            print(f"[settlement] MTX error: {e2}")
+
+        _settlement_loaded_date = d
+        return True
+
+    print("[settlement] failed: no CSV data found in past 10 days")
     return False
 
 def fetch_ref_prices(contract: dict, strikes: list) -> dict:
@@ -455,7 +517,7 @@ def fetch_ref_prices(contract: dict, strikes: list) -> dict:
         if not batch:
             continue
         try:
-            r = requests.post(BASE + "getQuoteDetail",
+            r = requests.post(_get_base() + "getQuoteDetail",
                 json={"SymbolID": batch},
                 headers=HDRS, timeout=10, verify=False)
             if r.status_code != 200:
@@ -483,12 +545,15 @@ def build_chain_data_closed(contract: dict, spot: float, hv: float) -> list:
     atm_r = round(spot / step) * step
     sigma = max(hv, 10.0) / 100
 
-    strikes = [atm_r + i * step for i in range(-18, 19)]
-    call_syms = [f'{contract["prefix"]}{k}{contract["call_suffix"]}' for k in strikes]
-    put_syms  = [f'{contract["prefix"]}{k}{contract["put_suffix"]}'  for k in strikes]
-
-    # 讀取上次開盤時的成交價快取
+    # 讀取 CSV 快取，用實際有資料的履約價範圍（比硬寫 ±18 準確）
     live_cache = _last_live_prices.get(contract["label"], {})
+    cached_ks = sorted(k for k in live_cache.keys() if isinstance(k, (int, float)))
+    if cached_ks:
+        lo = min(int(cached_ks[0]),  atm_r - 18 * step)
+        hi = max(int(cached_ks[-1]), atm_r + 18 * step)
+    else:
+        lo, hi = atm_r - 18 * step, atm_r + 18 * step
+    strikes = list(range(lo, hi + step, step))
 
     result = []
     for k in strikes:
@@ -552,6 +617,7 @@ _last_live_prices: dict = {}
 # 最後一個交易日資訊（由 fetch_settlement_prices_from_csv 填入）
 _last_trading_date_str = "--"   # e.g. "04/10"
 _mtx_settlement_close  = 0.0   # MTX 近月合約日盤收盤價
+_settlement_loaded_date = None  # 已成功載入結算價的日期（date 物件）
 
 def build_chain_data(contract, spot, hv, compute_atm=False):
     global _last_live_prices
@@ -608,7 +674,7 @@ def build_chain_data(contract, spot, hv, compute_atm=False):
 
 def refresh_loop():
     import traceback as _tb
-    global _hv_last_fetch, _hv_value, _last_error, _refresh_log
+    global _hv_last_fetch, _hv_value, _last_error, _refresh_log, _settlement_loaded_date
     _refresh_log = [f"THREAD_STARTED_AT:{datetime.now().isoformat()}"]
     print(f"[refresh_loop] started pid={os.getpid()} tid={threading.current_thread().ident}")
     # 啟動時預載最近交易日收盤價（讓收盤期間立刻有成交價可看）
@@ -627,6 +693,12 @@ def refresh_loop():
                 log.append(f"step1_done:spot={spot}")
 
                 if spot <= 0 or not market_open:
+                    # 收盤：若今日結算價尚未載入，嘗試重新抓取（每 300s 最多一次）
+                    today_d = date.today()
+                    if _settlement_loaded_date != today_d:
+                        log.append("step1b:re_fetch_settlement")
+                        fetch_settlement_prices_from_csv()
+                        log.append(f"step1b_done:loaded={_settlement_loaded_date}")
                     # 收盤：用 Yahoo Finance 取最新收盤價
                     if spot <= 0:
                         log.append("step2:fetch_yahoo")
@@ -785,6 +857,428 @@ MANIFEST_JSON = """{
   ]
 }"""
 
+DELTA_HTML = r"""<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0d1117">
+<title>Delta 部位監控 — NightGod</title>
+<style>
+:root{--bg:#0d1117;--bg2:#161b22;--bd:#30363d;--tx:#e6edf3;--dim:#8b949e;
+      --red:#ff6b6b;--green:#58d68d;--yel:#f0e68c;--cy:#4dd0e1;--bl:#79b8ff}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{background:var(--bg);color:var(--tx);font-family:'Courier New',monospace;font-size:13px;min-height:100vh}
+/* Header */
+#hdr{background:var(--bg2);border-bottom:1px solid var(--bd);padding:10px 12px;
+     position:sticky;top:0;z-index:100}
+.prow{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.pl{font-size:11px;color:var(--dim)}.pv{font-size:16px;font-weight:bold}
+.sv{color:var(--red)}.hvc{color:var(--cy)}
+.tvw{margin-left:auto;display:flex;align-items:center;gap:5px}
+.dot-live{display:inline-block;width:7px;height:7px;border-radius:50%;
+          background:var(--green);animation:blink 2s infinite}
+.dot-closed{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--dim)}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.tvt{font-size:11px;color:var(--dim)}
+.back{font-size:11px;padding:2px 8px;border:1px solid var(--bd);border-radius:4px;
+      background:transparent;color:var(--dim);cursor:pointer;text-decoration:none;
+      white-space:nowrap}
+/* Delta panel */
+#dpanel{padding:18px 12px 14px;text-align:center;border-bottom:1px solid var(--bd);
+        background:#0d1117}
+.dlbl{font-size:11px;color:var(--dim);margin-bottom:6px}
+#dnum{font-size:46px;font-weight:bold;letter-spacing:-1px;line-height:1}
+.dp{color:var(--red)}.dn{color:var(--green)}.dz{color:var(--yel)}
+#bwrap{width:80%;max-width:280px;height:6px;background:var(--bd);border-radius:3px;
+       margin:10px auto 0;position:relative;overflow:hidden}
+#bl{height:6px;border-radius:3px;position:absolute;right:50%;background:var(--green)}
+#br{height:6px;border-radius:3px;position:absolute;left:50%;background:var(--red)}
+#dsub{font-size:11px;color:var(--dim);margin-top:7px;min-height:16px}
+/* Toolbar */
+#toolbar{padding:9px 12px;display:flex;gap:8px;align-items:center;
+         border-bottom:1px solid var(--bd)}
+.btn-add{padding:5px 14px;background:#1a3a2a;color:var(--green);border:1px solid var(--green);
+         border-radius:4px;cursor:pointer;font-size:12px;font-family:'Courier New',monospace}
+.btn-load{padding:5px 12px;background:#1a2a3a;color:var(--bl);border:1px solid var(--bl);
+          border-radius:4px;cursor:pointer;font-size:12px;font-family:'Courier New',monospace}
+.btn-load:hover{background:#253a50}
+.btn-load:disabled{opacity:.4;cursor:default}
+.btn-clr{padding:5px 10px;background:transparent;color:#555;border:1px solid #2a2a2a;
+         border-radius:4px;cursor:pointer;font-size:12px;font-family:'Courier New',monospace}
+.btn-clr:hover{color:var(--red);border-color:var(--red)}
+.broker-ts{font-size:10px;color:var(--dim);white-space:nowrap}
+/* Table */
+#tw{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{border-collapse:collapse;width:100%;min-width:460px}
+th{background:#1c2030;color:var(--dim);padding:5px 8px;font-size:11px;
+   border-bottom:1px solid var(--bd);white-space:nowrap;text-align:center}
+td{padding:5px 8px;border-bottom:1px solid #1d2433;white-space:nowrap;text-align:center}
+td.L{text-align:left}.long-c{color:var(--red);font-weight:bold}
+.short-c{color:var(--green);font-weight:bold}
+.dpos-c{color:var(--red)}.dneg-c{color:var(--green)}.nd{color:var(--bd)}
+.dbtn{border:1px solid #553;background:none;color:#884;border-radius:3px;
+      padding:1px 6px;cursor:pointer;font-size:10px}
+.dbtn:hover{background:#1a0a0a;color:var(--red);border-color:var(--red)}
+/* Empty */
+#empty{text-align:center;padding:50px 20px;color:var(--dim);line-height:1.8}
+/* Modal */
+#mbg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.78);
+     z-index:200;align-items:flex-end;justify-content:center}
+#mbg.open{display:flex}
+#mbox{background:var(--bg2);border:1px solid var(--bd);border-radius:12px 12px 0 0;
+      padding:20px;width:100%;max-width:480px;max-height:88vh;overflow-y:auto}
+#mbox h3{margin-bottom:14px;font-size:14px;color:var(--bl)}
+.fr{margin-bottom:11px}
+.fr label{display:block;font-size:11px;color:var(--dim);margin-bottom:3px}
+.fr select,.fr input{width:100%;padding:7px 9px;background:var(--bg);
+  border:1px solid var(--bd);border-radius:4px;color:var(--tx);
+  font-size:13px;font-family:'Courier New',monospace}
+.fr select:focus,.fr input:focus{outline:none;border-color:var(--bl)}
+#mopt{display:none}
+.mbtns{display:flex;gap:8px;margin-top:14px}
+.mok{flex:1;padding:9px;background:#1a3a2a;color:var(--green);border:1px solid var(--green);
+     border-radius:4px;cursor:pointer;font-size:13px;font-family:'Courier New',monospace}
+.mno{flex:1;padding:9px;background:transparent;color:var(--dim);border:1px solid var(--bd);
+     border-radius:4px;cursor:pointer;font-size:13px;font-family:'Courier New',monospace}
+.mnote{font-size:11px;color:var(--dim);margin-top:5px;min-height:15px}
+@media(max-width:480px){#dnum{font-size:38px}td,th{font-size:11px;padding:4px 5px}}
+</style>
+</head>
+<body>
+<div id="hdr">
+  <div class="prow">
+    <a class="back" href="/">← 選擇權看板</a>
+    <div><span class="pl">現貨 </span><span class="pv sv" id="sv">--</span></div>
+    <div><span class="pl">HV </span><span class="pv hvc" id="hv">--%</span></div>
+    <div class="tvw"><span id="dot" class="dot-live"></span><span class="tvt" id="tv">--:--:--</span></div>
+  </div>
+</div>
+
+<div id="dpanel">
+  <div class="dlbl">總 Delta（小台口數當量）</div>
+  <div id="dnum" class="dz">--</div>
+  <div id="bwrap"><div id="bl" style="width:0"></div><div id="br" style="width:0"></div></div>
+  <div id="dsub"></div>
+</div>
+
+<div id="toolbar">
+  <button class="btn-add" onclick="openModal()">＋ 新增部位</button>
+  <button class="btn-load" id="btnLoad" onclick="loadFromBroker()">↓ 元大載入庫存</button>
+  <span class="broker-ts" id="broker-time"></span>
+  <button class="btn-clr" onclick="clearAll()" style="margin-left:auto">清空全部</button>
+</div>
+
+<div id="tw">
+  <div id="empty">尚未輸入任何部位<br><span style="font-size:11px">按「新增部位」開始輸入</span></div>
+  <table id="ptbl" style="display:none">
+    <thead>
+      <tr>
+        <th style="text-align:left">商品</th>
+        <th>方向</th><th>口數</th>
+        <th>詳細</th>
+        <th>δ/口</th><th>δ小計</th><th></th>
+      </tr>
+    </thead>
+    <tbody id="pbody"></tbody>
+    <tfoot>
+      <tr id="tfrow" style="display:none">
+        <td colspan="5" style="text-align:right;color:var(--dim);font-size:11px;padding-right:12px">合計 Delta</td>
+        <td id="tftotal" style="font-weight:bold;text-align:right"></td>
+        <td></td>
+      </tr>
+    </tfoot>
+  </table>
+</div>
+
+<!-- 新增部位 Modal -->
+<div id="mbg" onclick="if(event.target.id==='mbg')closeModal()">
+<div id="mbox">
+  <h3>新增部位</h3>
+  <div class="fr">
+    <label>商品類型</label>
+    <select id="f-type" onchange="onTypeChange()">
+      <option value="mxf">小台期貨（MXF）</option>
+      <option value="opt">台指選擇權（TXO）</option>
+    </select>
+  </div>
+  <div class="fr">
+    <label>操作方向</label>
+    <select id="f-dir" onchange="updateNote()">
+      <option value="long">多（買進）</option>
+      <option value="short">空（賣出）</option>
+    </select>
+  </div>
+  <div class="fr">
+    <label>口數</label>
+    <input type="number" id="f-qty" value="1" min="1" max="999">
+  </div>
+  <div id="mopt">
+    <div class="fr">
+      <label>到期合約</label>
+      <select id="f-con"></select>
+    </div>
+    <div class="fr">
+      <label>買／賣權</label>
+      <select id="f-cp">
+        <option value="C">買權 Call（C）</option>
+        <option value="P">賣權 Put（P）</option>
+      </select>
+    </div>
+    <div class="fr">
+      <label>履約價</label>
+      <input type="number" id="f-strike" placeholder="例：22000" step="50">
+    </div>
+  </div>
+  <div class="mnote" id="mnote"></div>
+  <div class="mbtns">
+    <button class="mok" onclick="addPos()">確認新增</button>
+    <button class="mno" onclick="closeModal()">取消</button>
+  </div>
+</div>
+</div>
+
+<script>
+// ── 持久化 ────────────────────────────────────────
+let positions = JSON.parse(localStorage.getItem('dp_pos') || '[]');
+let nid = +localStorage.getItem('dp_nid') || 1;
+function save() {
+  localStorage.setItem('dp_pos', JSON.stringify(positions));
+  localStorage.setItem('dp_nid', String(nid));
+}
+
+// ── 市場資料 ──────────────────────────────────────
+let md = null;        // /api/chain 整包資料
+let contracts = [];   // [{label, expiry_str, days_left, chain}]
+
+// ── Black-Scholes Delta ───────────────────────────
+function normCDF(x) {
+  const a1=0.254829592,a2=-0.284496736,a3=1.421413741,a4=-1.453152027,a5=1.061405429,p=0.3275911;
+  const s = x < 0 ? -1 : 1; x = Math.abs(x);
+  const t = 1 / (1 + p * x);
+  const y = 1 - (((((a5*t+a4)*t+a3)*t+a2)*t+a1)*t*Math.exp(-x*x/2));
+  return 0.5 * (1 + s * y);
+}
+function bsDelta(S, K, T, sigma, isCall) {
+  const r = 0.015;
+  if (T <= 1e-6 || sigma <= 0 || S <= 0 || K <= 0)
+    return isCall ? (S >= K ? 1 : 0) : (S >= K ? 0 : -1);
+  const d1 = (Math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * Math.sqrt(T));
+  return isCall ? normCDF(d1) : normCDF(d1) - 1;
+}
+function T_years(expiryStr) {
+  const [y, mo, d] = expiryStr.split('/').map(Number);
+  const exp = new Date(y, mo - 1, d, 13, 30, 0);
+  const T = (exp - Date.now()) / (365 * 24 * 3600 * 1000);
+  return Math.max(T, 1 / (365 * 24 * 12));
+}
+
+// ── 每口 Delta 計算 ───────────────────────────────
+function dpu(pos) {
+  if (!md || !md.spot) return null;
+  const S = md.spot, hv = md.hv || 25;
+  const sign = pos.dir === 'long' ? 1 : -1;
+  if (pos.type === 'mxf') return sign * 1.0;
+  // 選擇權
+  const con = contracts.find(c => c.label === pos.contract_label);
+  if (!con) return null;
+  const T = T_years(con.expiry_str);
+  const isC = pos.cp === 'C';
+  // 優先用選擇權鏈的 IV，否則用 HV
+  let sigma = hv / 100;
+  if (con.chain) {
+    const row = con.chain.find(r => r.strike === pos.strike);
+    if (row) {
+      const iv = isC ? row.c_iv : row.p_iv;
+      if (iv && iv > 0) sigma = iv / 100;
+    }
+  }
+  return sign * bsDelta(S, pos.strike, T, sigma, isC);
+}
+
+// ── 渲染表格 ──────────────────────────────────────
+function render() {
+  const empty = document.getElementById('empty');
+  const tbl   = document.getElementById('ptbl');
+  const tbody = document.getElementById('pbody');
+  const tfrow = document.getElementById('tfrow');
+
+  if (!positions.length) {
+    empty.style.display = ''; tbl.style.display = 'none';
+    tfrow.style.display = 'none'; setPanel(null); return;
+  }
+  empty.style.display = 'none'; tbl.style.display = '';
+  tfrow.style.display = '';
+
+  let total = 0, html = '';
+  for (const p of positions) {
+    const d = dpu(p);
+    const sub = d !== null ? d * p.qty : null;
+    if (sub !== null) total += sub;
+
+    const dirLbl = p.dir === 'long' ? '多' : '空';
+    const dirCls = p.dir === 'long' ? 'long-c' : 'short-c';
+
+    let prod = p.type === 'mxf' ? '小台 MXF' : 'TXO';
+    if (p.type === 'opt' && p.contract_label) {
+      const short = p.contract_label.split(' ')[0]; // 月選近月 → 月選近月
+      prod += ` <span style="font-size:10px;color:var(--dim)">${short}</span>`;
+    }
+    const detail = p.type === 'mxf' ? '─' : `${p.strike} ${p.cp}`;
+    const dpuStr = d !== null ? d.toFixed(3) : '--';
+    const dpuCls = d !== null ? (d > 0.001 ? 'dpos-c' : d < -0.001 ? 'dneg-c' : '') : 'nd';
+    const subStr = sub !== null ? sub.toFixed(2) : '--';
+    const subCls = sub !== null ? (sub > 0.01 ? 'dpos-c' : sub < -0.01 ? 'dneg-c' : '') : 'nd';
+
+    html += `<tr>
+      <td class="L">${prod}</td>
+      <td class="${dirCls}">${dirLbl}</td>
+      <td>${p.qty}</td>
+      <td style="color:var(--dim)">${detail}</td>
+      <td class="${dpuCls}" style="text-align:right">${dpuStr}</td>
+      <td class="${subCls}" style="text-align:right;font-weight:bold">${subStr}</td>
+      <td><button class="dbtn" onclick="delPos(${p.id})">✕</button></td>
+    </tr>`;
+  }
+  tbody.innerHTML = html;
+
+  const tf = document.getElementById('tftotal');
+  tf.textContent = (total >= 0 ? '+' : '') + total.toFixed(2);
+  tf.className = total > 0.01 ? 'dpos-c' : total < -0.01 ? 'dneg-c' : '';
+  setPanel(total);
+}
+
+function setPanel(total) {
+  const numEl = document.getElementById('dnum');
+  const sub   = document.getElementById('dsub');
+  const bl = document.getElementById('bl');
+  const br = document.getElementById('br');
+
+  if (total === null) {
+    numEl.textContent = '--'; numEl.className = 'dz';
+    bl.style.width = br.style.width = '0'; sub.textContent = ''; return;
+  }
+  numEl.textContent = (total >= 0 ? '+' : '') + total.toFixed(2);
+  numEl.className = total > 0.05 ? 'dp' : total < -0.05 ? 'dn' : 'dz';
+
+  // Bar（最大 ±10 口 = 各半）
+  const pct = Math.min(Math.abs(total) / 10, 1) * 48;
+  bl.style.width = br.style.width = '0';
+  if (total > 0.01) br.style.width = pct + '%';
+  else if (total < -0.01) bl.style.width = pct + '%';
+
+  if (md && md.spot > 0) {
+    const ntd = Math.round(total * md.spot * 50);
+    sub.textContent = `指數每漲 1 點 ≈ ${ntd >= 0 ? '+' : ''}${ntd.toLocaleString()} 元`;
+  } else { sub.textContent = ''; }
+}
+
+// ── 從元大載入庫存 ────────────────────────────────
+async function loadFromBroker() {
+  const btn = document.getElementById('btnLoad');
+  btn.disabled = true; btn.textContent = '載入中…';
+  try {
+    const r = await fetch('/api/positions');
+    const d = await r.json();
+    if (!d.ok) {
+      alert(d.error || '讀取失敗');
+      return;
+    }
+    if (!d.positions || !d.positions.length) {
+      alert('目前無庫存部位（positions.json 為空）');
+      return;
+    }
+    const msg = `元大庫存（${d.date} ${d.updated}）：${d.positions.length} 筆部位\n確定要取代目前所有部位？`;
+    if (positions.length && !confirm(msg)) return;
+    positions = d.positions.map(p => ({ id: nid++, ...p }));
+    save(); render();
+    document.getElementById('broker-time').textContent = `元大 ${d.updated}`;
+  } catch(e) {
+    alert('連線失敗，請確認庫存查詢工具（庫存查詢.py）正在執行中');
+  } finally {
+    btn.disabled = false; btn.textContent = '↓ 元大載入庫存';
+  }
+}
+
+// ── 資料拉取 ──────────────────────────────────────
+async function fetchData() {
+  try {
+    const r = await fetch('/api/chain');
+    const d = await r.json();
+    if (!d.ready) return;
+    md = d;
+    contracts = d.contracts || [];
+    document.getElementById('sv').textContent = d.spot ?
+      d.spot.toLocaleString('zh-TW', {minimumFractionDigits:2, maximumFractionDigits:2}) : '--';
+    document.getElementById('hv').textContent = d.hv ? d.hv.toFixed(2) + '%' : '--%';
+    document.getElementById('tv').textContent  = d.update_time || '--';
+    document.getElementById('dot').className   = (d.market_status === '收盤') ? 'dot-closed' : 'dot-live';
+    populateContracts();
+    render();
+  } catch(e) {}
+}
+
+// ── Modal ─────────────────────────────────────────
+function onTypeChange() {
+  const isOpt = document.getElementById('f-type').value === 'opt';
+  document.getElementById('mopt').style.display = isOpt ? '' : 'none';
+  updateNote();
+}
+function updateNote() {
+  const t = document.getElementById('f-type').value;
+  const d = document.getElementById('f-dir').value;
+  const map = {
+    'mxf-long' : 'δ/口 = +1.000（做多小台 → 正 Delta）',
+    'mxf-short': 'δ/口 = −1.000（做空小台 → 負 Delta）',
+    'opt-long' : '買進 Call → 正δ；買進 Put → 負δ',
+    'opt-short': '賣出 Call → 負δ；賣出 Put → 正δ',
+  };
+  document.getElementById('mnote').textContent = map[`${t}-${d}`] || '';
+}
+function populateContracts() {
+  const sel = document.getElementById('f-con');
+  const cur = sel.value;
+  sel.innerHTML = contracts.map(c =>
+    `<option value="${c.label}">${c.label}（剩 ${c.days_left} 天）</option>`
+  ).join('');
+  if (cur) { const opt = [...sel.options].find(o => o.value === cur); if (opt) sel.value = cur; }
+}
+function openModal() {
+  populateContracts(); onTypeChange();
+  document.getElementById('f-qty').value = '1';
+  document.getElementById('f-dir').value = 'long';
+  document.getElementById('f-strike').value = '';
+  document.getElementById('mbg').classList.add('open');
+}
+function closeModal() { document.getElementById('mbg').classList.remove('open'); }
+function addPos() {
+  const type = document.getElementById('f-type').value;
+  const dir  = document.getElementById('f-dir').value;
+  const qty  = Math.max(1, parseInt(document.getElementById('f-qty').value) || 1);
+  const p = { id: nid++, type, dir, qty };
+  if (type === 'opt') {
+    p.contract_label = document.getElementById('f-con').value;
+    p.cp     = document.getElementById('f-cp').value;
+    p.strike = parseInt(document.getElementById('f-strike').value);
+    if (!p.strike)          { alert('請輸入履約價'); return; }
+    if (!p.contract_label)  { alert('請選擇到期合約'); return; }
+  }
+  positions.push(p); save(); closeModal(); render();
+}
+function delPos(id) { positions = positions.filter(p => p.id !== id); save(); render(); }
+function clearAll() {
+  if (!positions.length) return;
+  if (!confirm('確定清空所有部位？')) return;
+  positions = []; save(); render();
+}
+
+fetchData();
+setInterval(fetchData, 6000);
+render();
+</script>
+</body>
+</html>"""
+
 @app.route("/icon.svg")
 def serve_icon():
     from flask import Response
@@ -798,17 +1292,80 @@ def serve_manifest():
 
 @app.route("/api/chain")
 def api_chain():
+    from flask import make_response
     with _lock:
         if not _cache["ready"]:
             return jsonify({"ready": False})
-        return jsonify({
+        resp = make_response(jsonify({
             "ready":True,
             "spot":_cache["spot"], "fut":_cache["fut"],
             "hv":_cache["hv"], "update_time":_cache["update_time"],
             "data_date": _cache.get("data_date","--"),
             "contracts":_cache["contracts"],
             "market_status": _cache.get("market_status", "即時"),
-        })
+        }))
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
+
+@app.route("/delta")
+def delta_page():
+    from flask import make_response
+    resp = make_response(render_template_string(DELTA_HTML))
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
+
+@app.route("/api/positions")
+def api_positions():
+    """讀取 positions.json（由 庫存查詢.py 寫入），回傳標準化部位列表。"""
+    positions_file = r"C:\Users\sppwh\OneDrive\桌面\2026當沖策略\龍蝦專用\positions.json"
+    try:
+        with open(positions_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return jsonify({"ok": False, "error": "positions.json 不存在，請先啟動庫存查詢工具"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+    # 建立 contract_month（202604）→ contract_label 對照表
+    month_to_label: dict = {}
+    with _lock:
+        cached_contracts = _cache.get("contracts", [])
+    if cached_contracts:
+        raw_list = cached_contracts   # 已含 expiry_str
+    else:
+        raw_list = [{"label": c["label"],
+                     "expiry_str": c["expiry"].strftime("%Y/%m/%d")}
+                    for c in get_active_contracts()]
+    for c in raw_list:
+        es = c.get("expiry_str", "")
+        if len(es) >= 7:
+            key = es[:7].replace("/", "")   # "2026/04/16" → "202604"
+            if key not in month_to_label:
+                month_to_label[key] = c["label"]
+
+    result = []
+    for p in data.get("positions", []):
+        pos = {
+            "type": p.get("type", "mxf"),
+            "dir":  p.get("dir",  "long"),
+            "qty":  int(p.get("qty", 1)),
+        }
+        if p.get("type") == "opt":
+            cm = str(p.get("contract_month", ""))
+            pos["contract_label"] = month_to_label.get(cm, f"TXO {cm[:4]}/{cm[4:]}" if len(cm)==6 else cm)
+            pos["cp"]     = p.get("cp", "C")
+            pos["strike"] = int(p.get("strike", 0))
+        result.append(pos)
+
+    return jsonify({
+        "ok":        True,
+        "updated":   data.get("updated", "--"),
+        "date":      data.get("date",    "--"),
+        "positions": result,
+    })
 
 @app.route("/health")
 def health():
@@ -965,6 +1522,7 @@ tr.atm td.sk{color:#fff176;background:#252510}
       <button class="vb" onclick="setView('m')">市場報價</button>
     </div>
     <span id="db" class="dbadge"></span>
+    <a href="/delta" style="font-size:11px;padding:3px 10px;border:1px solid var(--bd);border-radius:4px;color:var(--dim);text-decoration:none;white-space:nowrap;margin-left:auto">△ Delta</a>
   </div>
 </div>
 
